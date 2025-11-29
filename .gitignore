@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+contracts/out/
+contracts/cache/
+frontend/.next/
+frontend/out/
+
+# Environment files (keep .env.example, ignore actual secrets)
+.env
+.env.local
+.env.*.local
+facilitator/.env
+facilitator/.env.fuji
+
+# Foundry
+contracts/cache/
+contracts/out/
+
+# Keep broadcast for deployment records, but ignore sensitive cache
+contracts/cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.vercel
+*.pem
