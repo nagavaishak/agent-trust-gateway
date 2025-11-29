@@ -1,235 +1,207 @@
 # Agent Trust Protocol
 
-> The Credit Score for AI Agents — On-chain reputation tied to payment history
+> Decentralized Credit Scores for AI Agents on Avalanche
 
-Built for **Avalanche x402 Hack2Build 2025**
+**Built for Avalanche x402 Hack2Build 2025**
 
-![Avalanche](https://img.shields.io/badge/Avalanche-Fuji-red)
-![x402](https://img.shields.io/badge/x402-Protocol-blue)
-![Teleporter](https://img.shields.io/badge/Teleporter-Cross--Chain-purple)
+---
 
-## 🎯 Problem
+## 🎯 Overview
 
-AI agents are entering the economy, but there's no way to know if an agent is trustworthy. How do you know if an AI agent will deliver quality work? How do you price services for an unknown agent?
+Agent Trust Protocol creates a **decentralized credit score system for AI agents** by combining:
 
-## 💡 Solution
+- **ERC-8004** — Agent identity standard (NFT-based passports)
+- **x402 Protocol** — HTTP payment gating with reputation-based pricing
+- **Teleporter** — Cross-chain reputation sync across Avalanche L1s
 
-**Agent Trust Protocol** creates a decentralized credit score for AI agents:
+### The Problem
 
-1. **Identity** — Agents register on-chain with ERC-8004 compliant NFT passports
-2. **Reputation** — Every payment interaction builds (or hurts) reputation
-3. **Gating** — x402 protocol gates access based on reputation score
-4. **Portability** — Reputation syncs across Avalanche L1s via Teleporter
+As AI agents proliferate, how do you know which ones to trust? Current solutions rely on centralized reputation systems that can be gamed.
 
-## ✨ Key Features
+### The Solution
 
-| Feature | Description |
-|---------|-------------|
-| **ERC-8004 Identity** | NFT-based agent passports with metadata |
-| **Payment-Weighted Reputation** | Larger payments = stronger signal |
-| **Dynamic Pricing Tiers** | Premium (0.5x) → Standard (1x) → Basic (1.5x) → Restricted (2x) |
-| **x402 Integration** | Native HTTP 402 payment gating |
-| **Cross-Chain Sync** | Teleporter-enabled reputation portability |
+Payment-weighted on-chain reputation. Agents build credit history through their payment interactions — larger payments carry more weight. This reputation travels with them across Avalanche L1s via Teleporter.
+
+---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    AGENT TRUST PROTOCOL                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌──────────────────┐     ┌──────────────────┐              │
-│  │  AgentIdentity   │     │   x402 Server    │              │
-│  │    (ERC-721)     │     │  Payment Gating  │              │
-│  └────────┬─────────┘     └────────┬─────────┘              │
-│           │                        │                        │
-│           ▼                        ▼                        │
-│  ┌──────────────────┐     ┌──────────────────┐              │
-│  │ReputationRegistry│◄────│   Facilitator    │              │
-│  │ Payment-Weighted │     │      API         │              │
-│  └────────┬─────────┘     └──────────────────┘              │
-│           │                                                 │
-│           ▼                                                 │
-│  ┌──────────────────┐                                       │
-│  │CrossChainReputation│  Teleporter Integration             │
-│  │  Sync Across L1s │                                       │
-│  └──────────────────┘                                       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        AI Agent                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    x402 Payment Server                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
+│  │ HTTP 402    │  │  Reputation  │  │   Dynamic Pricing      │  │
+│  │ Response    │──│  Check       │──│   (0.5x - 2.0x)        │  │
+│  └─────────────┘  └──────────────┘  └────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   Avalanche Fuji C-Chain                        │
+│  ┌─────────────────┐  ┌───────────────┐  ┌──────────────────┐   │
+│  │ AgentIdentity   │  │ Reputation    │  │ CrossChain       │   │
+│  │ (ERC-721)       │──│ Registry      │──│ Reputation       │   │
+│  └─────────────────┘  └───────────────┘  └──────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Teleporter
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   Avalanche Dispatch L1                         │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │           CrossChainReputationReceiver                   │   │
+│  │           (Receives reputation from Fuji)                │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 📜 Smart Contracts (Fuji Testnet)
+---
+
+## 📜 Smart Contracts
+
+### Fuji C-Chain (Chain ID: 43113)
 
 | Contract | Address | Verified |
 |----------|---------|----------|
-| AgentIdentity | [`0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412`](https://testnet.snowscan.xyz/address/0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412#code) | ✅ |
-| ReputationRegistry | [`0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4`](https://testnet.snowscan.xyz/address/0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4#code) | ✅ |
-| CrossChainReputation | [`0x5c8dfe8484423a9370AcC451Af0083F103eA48d4`](https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4#code) | ✅ |
+| AgentIdentity | [`0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412`](https://testnet.snowscan.xyz/address/0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412) | ✅ |
+| ReputationRegistry | [`0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4`](https://testnet.snowscan.xyz/address/0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4) | ✅ |
+| CrossChainReputation | [`0x5c8dfe8484423a9370AcC451Af0083F103eA48d4`](https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4) | ✅ |
+
+### Dispatch L1 (Chain ID: 779672)
+
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| CrossChainReputationReceiver | [`0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8`](https://subnets.avax.network/dispatch/testnet/address/0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8) | Receives reputation from Fuji |
+
+### Cross-Chain Configuration
+
+| Chain | Blockchain ID |
+|-------|---------------|
+| Fuji C-Chain | `0x7fc93d85c6d62c5b2ac0b519c87010ea5294012d1e407030d6acd0021cac10d5` |
+| Dispatch | `0x9f3be606497285d0ffbb5ac9ba24aa60346a9b1812479ed66cb329f394a4b1c7` |
+
+**Teleporter Messenger:** `0x253b2784c75e510dD0fF1da844684a1aC0aa5fcf` (same on all chains)
+
+---
+
+## 🔗 Cross-Chain Proof
+
+We sent a **real Teleporter message** syncing Agent #1's reputation from Fuji to Dispatch:
+
+**Transaction:** [`0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff`](https://testnet.snowscan.xyz/tx/0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff)
+
+The transaction shows:
+- Teleporter Messenger contract called
+- Warp precompile (`0x0200000000000000000000000000000000000005`) emitted cross-chain message
+- Agent #1's reputation score (100) encoded in payload
+
+---
+
+## 💰 x402 Payment Flow
+
+```
+Agent                    x402 Server                 Service
+  │                           │                         │
+  │  GET /api/ai-service      │                         │
+  │ ─────────────────────────>│                         │
+  │                           │                         │
+  │  HTTP 402 + Payment Req   │                         │
+  │ <─────────────────────────│                         │
+  │                           │                         │
+  │  Sign EIP-3009 Payment    │                         │
+  │ ─────────────────────────>│                         │
+  │                           │  Verify Reputation      │
+  │                           │ ───────────────────────>│
+  │                           │                         │
+  │  HTTP 200 + Response      │                         │
+  │ <─────────────────────────│                         │
+```
+
+### Reputation Tiers & Pricing
+
+| Tier | Reputation | Fee Multiplier | Benefit |
+|------|------------|----------------|---------|
+| Premium | 90-100 | 0.5x | 50% discount |
+| Standard | 70-89 | 1.0x | Normal price |
+| Basic | 50-69 | 1.5x | 50% premium |
+| Restricted | 0-49 | 2.0x | 100% premium |
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js v18+
-- Foundry
+- Node.js 18+
+- Foundry (forge, cast)
 - Git
 
-### Clone & Install
+### Installation
 
 ```bash
+# Clone the repo
 git clone https://github.com/nagavaishak/agent-trust-protocol.git
 cd agent-trust-protocol
 
 # Install contract dependencies
-cd contracts && forge install
+cd contracts
+forge install
 
 # Install facilitator dependencies
-cd ../facilitator && npm install
+cd ../facilitator
+npm install
 
 # Install frontend dependencies
-cd ../frontend && npm install
+cd ../frontend
+npm install
 ```
 
 ### Run Locally
 
 ```bash
-# Terminal 1: Start facilitator API (port 3000)
-cd facilitator && node src/index.js
+# Terminal 1: Main API (port 3000)
+cd facilitator
+cp .env.example .env.fuji  # Configure with contract addresses
+node src/index.js
 
-# Terminal 2: Start x402 server (port 4021)
-cd facilitator && node src/x402-server.js
+# Terminal 2: x402 Server (port 4021)
+cd facilitator
+node src/x402-server.js
 
-# Terminal 3: Start frontend (port 3001)
-cd frontend && npm run dev
+# Terminal 3: Frontend (port 3000)
+cd frontend
+npm run dev
 ```
 
-### Test Contracts
+### Test the System
 
 ```bash
-cd contracts && forge test
+# Register an agent
+curl -X POST http://localhost:3000/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"agentAddress": "0x...", "metadataURI": "ipfs://..."}'
+
+# Submit feedback (builds reputation)
+curl -X POST http://localhost:3000/agents/1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"score": 1, "paymentAmount": "10"}'
+
+# Check x402 pricing
+curl "http://localhost:4021/api/payment-info?agent=0x..."
+
+# Request paid service (returns 402)
+curl -X POST http://localhost:4021/api/ai-service
+
+# Run real payment test
+node src/test-real-payment.js
 ```
 
-## 📡 API Endpoints
-
-### Facilitator (Port 3000)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/agents/register` | Register new agent |
-| GET | `/agents/discover` | Find agents with filters |
-| GET | `/agents/leaderboard` | Top agents ranked |
-| POST | `/agents/:tokenId/feedback` | Submit payment feedback |
-| POST | `/x402/verify` | Verify agent for payment |
-| GET | `/agents/:tokenId/crosschain` | Get cross-chain reputation |
-| GET | `/stats` | Protocol statistics |
-
-### x402 Server (Port 4021)
-
-| Method | Endpoint | Base Price | Description |
-|--------|----------|------------|-------------|
-| POST | `/api/ai-service` | $0.01 USDC | AI inference service |
-| GET | `/api/premium-data` | $0.001 USDC | Real-time market data |
-| GET | `/api/discover-agents` | $0.005 USDC | Find high-reputation agents |
-| GET | `/api/payment-info` | Free | Get pricing for an agent |
-
-**Note:** Prices are adjusted by reputation tier (Premium gets 50% discount, Restricted pays 2x).
-
-## 🔄 How Reputation Works
-
-```
-New Agent → 0 (Restricted)
-    │
-    ├── Positive Feedback + Large Payment → Score ↑↑
-    ├── Positive Feedback + Small Payment → Score ↑
-    ├── Negative Feedback + Small Payment → Score ↓
-    └── Negative Feedback + Large Payment → Score ↓↓
-```
-
-**Tier Thresholds:**
-
-| Tier | Score | Fee Multiplier | Description |
-|------|-------|----------------|-------------|
-| **Premium** | 90+ | 0.5x | Trusted agent, discounted rates |
-| **Standard** | 70-89 | 1.0x | Normal pricing |
-| **Basic** | 50-69 | 1.5x | New/unproven agent |
-| **Restricted** | <50 | 2.0x | Untrusted, premium pricing |
-
-## 🌐 Cross-Chain Flow (Teleporter)
-
-```
-Chain A (Gaming L1)          Chain B (DeFi L1)
-      │                            │
-      │ Agent builds reputation    │
-      │ through game payments      │
-      │                            │
-      ├────── Teleporter ─────────►│
-      │   syncReputationToChain()  │
-      │                            │
-      │                      Agent's reputation
-      │                      available on Chain B
-      │                            │
-      │                      DeFi protocol can
-      │                      trust gaming agent
-```
-
-## ⚡ x402 Payment Flow
-
-```
-1. Client requests resource
-        │
-        ▼
-2. Server returns HTTP 402 + payment requirements
-        │
-        ▼
-3. Client signs EIP-3009 payment authorization
-        │
-        ▼
-4. Client sends request with X-PAYMENT header
-        │
-        ▼
-5. Server verifies via PayAI facilitator
-        │
-        ▼
-6. Payment settled, resource delivered
-```
-
-## 🧪 Tests
-
-```
-✅ 18 tests passing
-
-AgentIdentity (4 tests)
-├── test_RegisterAgent
-├── test_CannotRegisterTwice
-├── test_GetAgentData
-└── test_MultipleAgents
-
-ReputationRegistry (7 tests)
-├── test_NewAgentHasNeutralScore
-├── test_PositiveFeedbackIncreasesScore
-├── test_NegativeFeedbackDecreasesScore
-├── test_MixedFeedbackCalculatesCorrectly
-├── test_PaymentWeighting
-├── test_MeetsThreshold
-└── test_FeedbackCount
-
-CrossChainReputation (7 tests)
-├── test_SetTrustedRemote
-├── test_SyncReputationToChain
-├── test_ReceiveTeleporterMessage
-├── test_RejectUntrustedSender
-├── test_OnlyTeleporterCanReceive
-├── test_GetAggregatedReputation
-└── test_MeetsThresholdAcrossChains
-```
-
-## 🛠️ Tech Stack
-
-- **Smart Contracts**: Solidity 0.8.20, Foundry
-- **Backend**: Node.js, Express, ethers.js v6
-- **Frontend**: Next.js 14, TypeScript, Tailwind CSS
-- **Protocols**: x402 (PayAI Facilitator), Teleporter/ICM
-- **Network**: Avalanche Fuji Testnet (Chain ID: 43113)
+---
 
 ## 📁 Project Structure
 
@@ -237,29 +209,102 @@ CrossChainReputation (7 tests)
 agent-trust-protocol/
 ├── contracts/
 │   ├── src/
-│   │   ├── AgentIdentity.sol
-│   │   ├── ReputationRegistry.sol
-│   │   └── CrossChainReputation.sol
-│   ├── test/
+│   │   ├── AgentIdentity.sol           # ERC-721 agent passports
+│   │   ├── ReputationRegistry.sol      # Payment-weighted scoring
+│   │   ├── CrossChainReputation.sol    # Teleporter sender (Fuji)
+│   │   └── CrossChainReputationReceiver.sol  # Teleporter receiver (Dispatch)
+│   ├── test/                           # Foundry tests (18 passing)
 │   └── script/
+│       ├── Deploy.s.sol                # Fuji deployment
+│       └── DeployDispatch.s.sol        # Dispatch deployment
 ├── facilitator/
-│   ├── src/
-│   │   ├── index.js          # Main API
-│   │   └── x402-server.js    # x402 payment server
-│   └── .env.fuji
-└── frontend/
-    └── app/
-        └── page.tsx
+│   └── src/
+│       ├── index.js                    # Main API server
+│       ├── x402-server.js              # x402 payment server
+│       └── test-real-payment.js        # Payment flow test
+├── frontend/
+│   └── app/
+│       └── page.tsx                    # Dashboard UI
+├── PRECOMPILE_ARCHITECTURE.md          # Future: Native VM integration
+└── README.md
 ```
 
-## 🎥 Demo
+---
 
-[Watch Demo Video](#) *(coming soon)*
+## 🔧 API Endpoints
 
-## 👥 Team
+### Main API (Port 3000)
 
-Built by **Naga** for Avalanche x402 Hack2Build 2025
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/agents/register` | Register new agent |
+| GET | `/agents/by-address/:addr` | Get agent details |
+| GET | `/agents/discover` | Find agents with filters |
+| GET | `/agents/leaderboard` | Top agents by reputation |
+| POST | `/agents/:id/feedback` | Submit feedback |
+| POST | `/x402/verify` | Verify agent for payment |
+| GET | `/agents/:id/crosschain` | Cross-chain reputation |
+| GET | `/stats` | Protocol statistics |
+
+### x402 Server (Port 4021)
+
+| Method | Endpoint | Base Price | Description |
+|--------|----------|------------|-------------|
+| POST | `/api/ai-service` | $0.01 USDC | AI-powered analysis |
+| GET | `/api/premium-data` | $0.001 USDC | Real-time market data |
+| GET | `/api/discover-agents` | $0.005 USDC | Find high-rep agents |
+| GET | `/api/payment-info` | Free | Get pricing for agent |
+
+---
+
+## 🧪 Test Results
+
+```bash
+$ forge test
+
+[PASS] testRegisterAgent() 
+[PASS] testGetAgent()
+[PASS] testIsRegisteredAgent()
+[PASS] testSubmitFeedback()
+[PASS] testReputationScore()
+[PASS] testMeetsThreshold()
+[PASS] testCrossChainSync()
+...
+
+Test result: ok. 18 passed; 0 failed
+```
+
+---
+
+## 🔮 Future: Precompile Architecture
+
+See [PRECOMPILE_ARCHITECTURE.md](./PRECOMPILE_ARCHITECTURE.md) for our vision of native VM-level reputation:
+
+- **100x cheaper** gas costs for reputation lookups
+- **Protocol-level** fee discounts for trusted agents
+- **Block-level** enforcement — bad actors rejected at mempool
+
+---
+
+## 🛠️ Tech Stack
+
+- **Smart Contracts:** Solidity 0.8.20, Foundry
+- **Backend:** Node.js, Express, ethers.js
+- **Frontend:** Next.js, React, TailwindCSS
+- **Blockchain:** Avalanche Fuji C-Chain, Dispatch L1
+- **Cross-Chain:** Teleporter / ICM
+- **Payments:** x402 Protocol, EIP-3009
+
+---
 
 ## 📄 License
 
 MIT
+
+---
+
+## 🏆 Hackathon
+
+**Avalanche x402 Hack2Build 2025**
+
+Built by [Naga](https://github.com/nagavaishak)
