@@ -22,13 +22,17 @@ const IDENTITY_ABI = [
   "event AgentRegistered(uint256 indexed tokenId, address indexed agentAddress, string metadataURI)"
 ];
 
+// FIXED: Correct function signatures for ReputationRegistry
 const REPUTATION_ABI = [
-  "function submitFeedback(uint256 tokenId, int8 score, uint256 paymentAmount) external",
-  "function getReputation(uint256 tokenId) external view returns (uint256)",
-  "function getTotalPaymentVolume(uint256 tokenId) external view returns (uint256)",
-  "function getTotalPositiveFeedback(uint256 tokenId) external view returns (uint256)",
-  "function getTotalNegativeFeedback(uint256 tokenId) external view returns (uint256)",
-  "event FeedbackSubmitted(uint256 indexed tokenId, address indexed submitter, int8 score, uint256 paymentAmount)"
+  // submitFeedback takes 4 params including txHash
+  "function submitFeedback(uint256 agentTokenId, int8 score, uint256 paymentAmount, bytes32 txHash) external",
+  // getReputationScore returns uint256 (0-100)
+  "function getReputationScore(uint256 agentTokenId) external view returns (uint256)",
+  // getReputation returns the full struct
+  "function getReputation(uint256 agentTokenId) external view returns (tuple(uint256 totalPositive, uint256 totalNegative, uint256 totalPaymentVolume, uint256 feedbackCount, uint256 lastUpdated))",
+  "function getFeedbackCount(uint256 agentTokenId) external view returns (uint256)",
+  "function meetsThreshold(uint256 agentTokenId, uint256 minScore) external view returns (bool)",
+  "event FeedbackSubmitted(uint256 indexed agentTokenId, address indexed from, int8 score, uint256 paymentAmount)"
 ];
 
 const CROSSCHAIN_ABI = [
@@ -95,7 +99,7 @@ app.post('/agents/register', async (req, res) => {
       return res.status(400).json({ error: 'Missing agentAddress or metadataURI' });
     }
 
-    // Check if already registered - FIXED function name
+    // Check if already registered
     const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
     if (isRegistered) {
       const tokenId = await identityContract.agentToTokenId(agentAddress);
@@ -111,26 +115,13 @@ app.post('/agents/register', async (req, res) => {
     const tx = await identityContract.registerAgent(agentAddress, metadataURI);
     const receipt = await tx.wait();
     
-    // Get the token ID from the event
-    const event = receipt.logs.find(log => {
-      try {
-        return identityContract.interface.parseLog(log)?.name === 'AgentRegistered';
-      } catch { return false; }
-    });
-    
-    let tokenId;
-    if (event) {
-      const parsed = identityContract.interface.parseLog(event);
-      tokenId = parsed.args.tokenId.toString();
-    } else {
-      tokenId = await identityContract.agentToTokenId(agentAddress);
-      tokenId = tokenId.toString();
-    }
+    // Get the token ID
+    const tokenId = await identityContract.agentToTokenId(agentAddress);
 
     // Cache the agent
     agentCache.set(agentAddress.toLowerCase(), {
       address: agentAddress,
-      tokenId,
+      tokenId: tokenId.toString(),
       metadataURI,
       registeredAt: Date.now()
     });
@@ -138,7 +129,7 @@ app.post('/agents/register', async (req, res) => {
     res.json({
       success: true,
       agentAddress,
-      tokenId,
+      tokenId: tokenId.toString(),
       metadataURI,
       txHash: receipt.hash
     });
@@ -161,21 +152,32 @@ app.get('/agents/by-address/:address', async (req, res) => {
 
     const tokenId = await identityContract.agentToTokenId(address);
     
-    let reputation = 50; // Default
+    // FIXED: Use getReputationScore for the score
+    let reputation = 50; // Default for new agents
     try {
-      reputation = await reputationContract.getReputation(tokenId);
+      reputation = await reputationContract.getReputationScore(tokenId);
       reputation = Number(reputation);
     } catch (e) {
-      console.log('Could not get reputation, using default:', e.message);
+      console.log('Could not get reputation score, using default:', e.message);
     }
 
-    let totalPayments = '0', positiveFeedback = '0', negativeFeedback = '0';
+    // Get full reputation data
+    let stats = {
+      totalPositive: '0',
+      totalNegative: '0',
+      totalPaymentVolume: '0',
+      feedbackCount: '0'
+    };
     try {
-      totalPayments = (await reputationContract.getTotalPaymentVolume(tokenId)).toString();
-      positiveFeedback = (await reputationContract.getTotalPositiveFeedback(tokenId)).toString();
-      negativeFeedback = (await reputationContract.getTotalNegativeFeedback(tokenId)).toString();
+      const repData = await reputationContract.getReputation(tokenId);
+      stats = {
+        totalPositive: repData.totalPositive.toString(),
+        totalNegative: repData.totalNegative.toString(),
+        totalPaymentVolume: repData.totalPaymentVolume.toString(),
+        feedbackCount: repData.feedbackCount.toString()
+      };
     } catch (e) {
-      console.log('Could not get stats:', e.message);
+      console.log('Could not get reputation data:', e.message);
     }
 
     const tier = getTier(reputation);
@@ -186,11 +188,7 @@ app.get('/agents/by-address/:address', async (req, res) => {
       reputation,
       tier,
       feeMultiplier: getFeeMultiplier(tier),
-      stats: {
-        totalPaymentVolume: totalPayments,
-        positiveFeedback,
-        negativeFeedback
-      }
+      stats
     });
 
   } catch (error) {
@@ -229,9 +227,10 @@ app.get('/agents/discover', async (req, res) => {
       try {
         const agentAddress = await identityContract.ownerOf(tokenId);
         
+        // FIXED: Use getReputationScore
         let repNum = 50;
         try {
-          const reputation = await reputationContract.getReputation(tokenId);
+          const reputation = await reputationContract.getReputationScore(tokenId);
           repNum = Number(reputation);
         } catch (e) {
           // Use default
@@ -242,11 +241,13 @@ app.get('/agents/discover', async (req, res) => {
         if (repNum < Number(minReputation) || repNum > Number(maxReputation)) continue;
         if (tier && agentTier !== tier) continue;
 
-        let totalPayments = '0', positiveFeedback = '0', negativeFeedback = '0';
+        let stats = { totalPaymentVolume: '0', feedbackCount: '0' };
         try {
-          totalPayments = (await reputationContract.getTotalPaymentVolume(tokenId)).toString();
-          positiveFeedback = (await reputationContract.getTotalPositiveFeedback(tokenId)).toString();
-          negativeFeedback = (await reputationContract.getTotalNegativeFeedback(tokenId)).toString();
+          const repData = await reputationContract.getReputation(tokenId);
+          stats = {
+            totalPaymentVolume: repData.totalPaymentVolume.toString(),
+            feedbackCount: repData.feedbackCount.toString()
+          };
         } catch (e) {
           // Use defaults
         }
@@ -257,11 +258,7 @@ app.get('/agents/discover', async (req, res) => {
           reputation: repNum,
           tier: agentTier,
           feeMultiplier: getFeeMultiplier(agentTier),
-          stats: {
-            totalPaymentVolume: totalPayments,
-            positiveFeedback,
-            negativeFeedback
-          }
+          stats
         });
 
       } catch (err) {
@@ -309,9 +306,10 @@ app.get('/agents/leaderboard', async (req, res) => {
       try {
         const agentAddress = await identityContract.ownerOf(tokenId);
         
+        // FIXED: Use getReputationScore
         let repNum = 50;
         try {
-          const reputation = await reputationContract.getReputation(tokenId);
+          const reputation = await reputationContract.getReputationScore(tokenId);
           repNum = Number(reputation);
         } catch (e) {
           // Use default
@@ -319,7 +317,8 @@ app.get('/agents/leaderboard', async (req, res) => {
 
         let totalPayments = '0';
         try {
-          totalPayments = (await reputationContract.getTotalPaymentVolume(tokenId)).toString();
+          const repData = await reputationContract.getReputation(tokenId);
+          totalPayments = repData.totalPaymentVolume.toString();
         } catch (e) {
           // Use default
         }
@@ -356,14 +355,14 @@ app.get('/agents/leaderboard', async (req, res) => {
 });
 
 // ============================================
-// FEEDBACK ENDPOINTS
+// FEEDBACK ENDPOINTS - FIXED
 // ============================================
 
 // Submit feedback for an agent
 app.post('/agents/:tokenId/feedback', async (req, res) => {
   try {
     const { tokenId } = req.params;
-    const { score, paymentAmount } = req.body;
+    const { score, paymentAmount, txHash } = req.body;
 
     if (score === undefined || paymentAmount === undefined) {
       return res.status(400).json({ error: 'Missing score or paymentAmount' });
@@ -373,20 +372,30 @@ app.post('/agents/:tokenId/feedback', async (req, res) => {
       return res.status(400).json({ error: 'Score must be -1, 0, or 1' });
     }
 
+    // Generate a txHash if not provided (for demo purposes)
+    const feedbackTxHash = txHash || ethers.keccak256(
+      ethers.toUtf8Bytes(`feedback-${tokenId}-${Date.now()}-${Math.random()}`)
+    );
+
+    // FIXED: Call with all 4 parameters
     const tx = await reputationContract.submitFeedback(
       tokenId,
       score,
-      ethers.parseEther(paymentAmount.toString())
+      ethers.parseEther(paymentAmount.toString()),
+      feedbackTxHash
     );
     const receipt = await tx.wait();
 
+    // FIXED: Use getReputationScore for the new score
     let newReputation = 50;
     try {
-      newReputation = await reputationContract.getReputation(tokenId);
+      newReputation = await reputationContract.getReputationScore(tokenId);
       newReputation = Number(newReputation);
     } catch (e) {
       console.log('Could not get new reputation:', e.message);
     }
+
+    const newTier = getTier(newReputation);
 
     res.json({
       success: true,
@@ -394,6 +403,8 @@ app.post('/agents/:tokenId/feedback', async (req, res) => {
       feedbackScore: score,
       paymentAmount,
       newReputation,
+      newTier,
+      feeMultiplier: getFeeMultiplier(newTier),
       txHash: receipt.hash
     });
 
@@ -416,7 +427,6 @@ app.post('/x402/verify', async (req, res) => {
       return res.status(400).json({ error: 'Missing agentAddress' });
     }
 
-    // FIXED: Use correct function name
     const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
     if (!isRegistered) {
       return res.json({
@@ -426,15 +436,15 @@ app.post('/x402/verify', async (req, res) => {
       });
     }
 
-    // FIXED: Use correct function name
     const tokenId = await identityContract.agentToTokenId(agentAddress);
     
+    // FIXED: Use getReputationScore
     let repNum = 50;
     try {
-      const reputation = await reputationContract.getReputation(tokenId);
+      const reputation = await reputationContract.getReputationScore(tokenId);
       repNum = Number(reputation);
     } catch (e) {
-      console.log('Could not get reputation, using default 50:', e.message);
+      console.log('Could not get reputation score, using default 50:', e.message);
     }
 
     const tier = getTier(repNum);
@@ -479,9 +489,10 @@ app.get('/agents/:tokenId/crosschain', async (req, res) => {
   try {
     const { tokenId } = req.params;
 
+    // FIXED: Use getReputationScore
     let localRep = 50;
     try {
-      localRep = await reputationContract.getReputation(tokenId);
+      localRep = await reputationContract.getReputationScore(tokenId);
       localRep = Number(localRep);
     } catch (e) {
       // Use default
@@ -516,9 +527,10 @@ app.post('/agents/:tokenId/sync', async (req, res) => {
 
     const chainName = destinationChain === 'A' ? 'Gaming L1' : 'DeFi L1';
 
+    // FIXED: Use getReputationScore
     let localRep = 50;
     try {
-      localRep = await reputationContract.getReputation(tokenId);
+      localRep = await reputationContract.getReputationScore(tokenId);
       localRep = Number(localRep);
     } catch (e) {
       // Use default
@@ -559,9 +571,10 @@ app.get('/stats', async (req, res) => {
     
     for (let tokenId = 1; tokenId <= Math.min(totalAgents, 50); tokenId++) {
       try {
+        // FIXED: Use getReputationScore
         let rep = 50;
         try {
-          rep = await reputationContract.getReputation(tokenId);
+          rep = await reputationContract.getReputationScore(tokenId);
           rep = Number(rep);
         } catch (e) {
           // Use default
@@ -619,15 +632,15 @@ app.listen(PORT, () => {
 ║  └─ CrossChain: ${process.env.CROSSCHAIN_CONTRACT}        ║
 ║                                                           ║
 ║  Endpoints:                                               ║
-║  ├─ POST /agents/register     - Register new agent        ║
+║  ├─ POST /agents/register        - Register new agent     ║
 ║  ├─ GET  /agents/by-address/:addr - Get agent details     ║
-║  ├─ GET  /agents/discover     - Find agents               ║
-║  ├─ GET  /agents/leaderboard  - Top agents                ║
-║  ├─ POST /agents/:id/feedback - Submit feedback           ║
-║  ├─ POST /x402/verify         - Verify for payment        ║
-║  ├─ GET  /agents/:id/crosschain - Cross-chain rep         ║
-║  ├─ POST /agents/:id/sync     - Sync to other chain       ║
-║  └─ GET  /stats               - Protocol statistics       ║
+║  ├─ GET  /agents/discover        - Find agents            ║
+║  ├─ GET  /agents/leaderboard     - Top agents             ║
+║  ├─ POST /agents/:id/feedback    - Submit feedback        ║
+║  ├─ POST /x402/verify            - Verify for payment     ║
+║  ├─ GET  /agents/:id/crosschain  - Cross-chain rep        ║
+║  ├─ POST /agents/:id/sync        - Sync to other chain    ║
+║  └─ GET  /stats                  - Protocol statistics    ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
 });
