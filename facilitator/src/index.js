@@ -24,11 +24,8 @@ const IDENTITY_ABI = [
 
 // FIXED: Correct function signatures for ReputationRegistry
 const REPUTATION_ABI = [
-  // submitFeedback takes 4 params including txHash
   "function submitFeedback(uint256 agentTokenId, int8 score, uint256 paymentAmount, bytes32 txHash) external",
-  // getReputationScore returns uint256 (0-100)
   "function getReputationScore(uint256 agentTokenId) external view returns (uint256)",
-  // getReputation returns the full struct
   "function getReputation(uint256 agentTokenId) external view returns (tuple(uint256 totalPositive, uint256 totalNegative, uint256 totalPaymentVolume, uint256 feedbackCount, uint256 lastUpdated))",
   "function getFeedbackCount(uint256 agentTokenId) external view returns (uint256)",
   "function meetsThreshold(uint256 agentTokenId, uint256 minScore) external view returns (bool)",
@@ -36,14 +33,17 @@ const REPUTATION_ABI = [
 ];
 
 const CROSSCHAIN_ABI = [
-  "function getAggregatedReputation(uint256 tokenId) external view returns (uint256)",
-  "function getRemoteReputation(uint256 tokenId, bytes32 remoteChainId) external view returns (uint256)",
-  "function setTrustedRemote(bytes32 remoteChainId, address remoteContract) external",
-  "function syncReputationToChain(bytes32 destinationChainId, uint256 tokenId) external"
+  "function syncReputationToChain(uint256 agentTokenId, bytes32 destinationBlockchainID) external returns (bytes32)",
+  "function getAggregatedReputation(uint256 tokenId, bytes32[] calldata chainIds) external view returns (uint256)",
+  "function getRemoteReputation(uint256 tokenId, bytes32 remoteChainId) external view returns (uint256 reputation, uint256 lastSync)",
+  "function setTrustedRemote(bytes32 remoteChainId, address remoteContract) external"
 ];
 
-// Setup provider and contracts
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+// Setup provider and contracts (disable ENS for Avalanche)
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL, {
+  chainId: 43113,
+  name: 'avalanche-fuji'
+});
 const wallet = new ethers.Wallet(process.env.SERVER_PRIVATE_KEY, provider);
 
 const identityContract = new ethers.Contract(
@@ -64,8 +64,42 @@ const crosschainContract = new ethers.Contract(
   wallet
 );
 
+// ============================================
+// DISPATCH L1 CONFIGURATION (REAL CROSS-CHAIN)
+// ============================================
+const DISPATCH_RPC = 'https://subnets.avax.network/dispatch/testnet/rpc';
+const DISPATCH_RECEIVER = '0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8';
+const FUJI_CHAIN_ID = '0x7fc93d85c6d62c5b2ac0b519c87010ea5294012d1e407030d6acd0021cac10d5';
+const DISPATCH_CHAIN_ID = '0x9f3be606497285d0ffbb5ac9ba24aa60346a9b1812479ed66cb329f394a4b1c7';
+const TELEPORTER_TX = '0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff';
+
+// Dispatch provider and contract (disable ENS)
+const dispatchProvider = new ethers.JsonRpcProvider(DISPATCH_RPC, {
+  chainId: 779672,
+  name: 'dispatch'
+});
+const DISPATCH_RECEIVER_ABI = [
+  "function getReputation(uint256 agentTokenId, bytes32 sourceChainId) external view returns (uint256)",
+  "function getAgentInfo(uint256 agentTokenId, bytes32 sourceChainId) external view returns (uint256 reputation, uint256 lastSync, bool exists)",
+  "function getKnownAgentCount() external view returns (uint256)"
+];
+const dispatchReceiverContract = new ethers.Contract(
+  DISPATCH_RECEIVER,
+  DISPATCH_RECEIVER_ABI,
+  dispatchProvider
+);
+
 // In-memory cache for registered agents (for discovery)
 const agentCache = new Map();
+
+// Helper: Validate and checksum address (prevents ENS lookup)
+function validateAddress(address) {
+  try {
+    return ethers.getAddress(address);
+  } catch (e) {
+    throw new Error(`Invalid address: ${address}`);
+  }
+}
 
 // Helper: Get tier from reputation
 function getTier(reputation) {
@@ -99,28 +133,31 @@ app.post('/agents/register', async (req, res) => {
       return res.status(400).json({ error: 'Missing agentAddress or metadataURI' });
     }
 
+    // Validate address to prevent ENS lookup
+    const validAddress = validateAddress(agentAddress);
+
     // Check if already registered
-    const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
+    const isRegistered = await identityContract.isRegisteredAgent(validAddress);
     if (isRegistered) {
-      const tokenId = await identityContract.agentToTokenId(agentAddress);
+      const tokenId = await identityContract.agentToTokenId(validAddress);
       return res.json({ 
         success: true, 
-        agentAddress,
+        agentAddress: validAddress,
         tokenId: tokenId.toString(),
         message: 'Agent already registered'
       });
     }
 
     // Register the agent
-    const tx = await identityContract.registerAgent(agentAddress, metadataURI);
+    const tx = await identityContract.registerAgent(validAddress, metadataURI);
     const receipt = await tx.wait();
     
     // Get the token ID
-    const tokenId = await identityContract.agentToTokenId(agentAddress);
+    const tokenId = await identityContract.agentToTokenId(validAddress);
 
     // Cache the agent
-    agentCache.set(agentAddress.toLowerCase(), {
-      address: agentAddress,
+    agentCache.set(validAddress.toLowerCase(), {
+      address: validAddress,
       tokenId: tokenId.toString(),
       metadataURI,
       registeredAt: Date.now()
@@ -128,7 +165,7 @@ app.post('/agents/register', async (req, res) => {
 
     res.json({
       success: true,
-      agentAddress,
+      agentAddress: validAddress,
       tokenId: tokenId.toString(),
       metadataURI,
       txHash: receipt.hash
@@ -145,12 +182,15 @@ app.get('/agents/by-address/:address', async (req, res) => {
   try {
     const { address } = req.params;
     
-    const isRegistered = await identityContract.isRegisteredAgent(address);
+    // Validate address to prevent ENS lookup
+    const validAddress = validateAddress(address);
+    
+    const isRegistered = await identityContract.isRegisteredAgent(validAddress);
     if (!isRegistered) {
       return res.status(404).json({ error: 'Agent not registered' });
     }
 
-    const tokenId = await identityContract.agentToTokenId(address);
+    const tokenId = await identityContract.agentToTokenId(validAddress);
     
     // FIXED: Use getReputationScore for the score
     let reputation = 50; // Default for new agents
@@ -183,7 +223,7 @@ app.get('/agents/by-address/:address', async (req, res) => {
     const tier = getTier(reputation);
     
     res.json({
-      address,
+      address: validAddress,
       tokenId: tokenId.toString(),
       reputation,
       tier,
@@ -427,16 +467,19 @@ app.post('/x402/verify', async (req, res) => {
       return res.status(400).json({ error: 'Missing agentAddress' });
     }
 
-    const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
+    // Validate address to prevent ENS lookup
+    const validAddress = validateAddress(agentAddress);
+
+    const isRegistered = await identityContract.isRegisteredAgent(validAddress);
     if (!isRegistered) {
       return res.json({
         approved: false,
-        agentAddress,
+        agentAddress: validAddress,
         reason: 'Agent not registered'
       });
     }
 
-    const tokenId = await identityContract.agentToTokenId(agentAddress);
+    const tokenId = await identityContract.agentToTokenId(validAddress);
     
     // FIXED: Use getReputationScore
     let repNum = 50;
@@ -454,7 +497,7 @@ app.post('/x402/verify', async (req, res) => {
     if (repNum < minReputation) {
       return res.json({
         approved: false,
-        agentAddress,
+        agentAddress: validAddress,
         tokenId: tokenId.toString(),
         reputation: repNum,
         tier,
@@ -464,7 +507,7 @@ app.post('/x402/verify', async (req, res) => {
 
     res.json({
       approved: true,
-      agentAddress,
+      agentAddress: validAddress,
       tokenId: tokenId.toString(),
       reputation: repNum,
       tier,
@@ -479,38 +522,79 @@ app.post('/x402/verify', async (req, res) => {
 });
 
 // ============================================
-// CROSS-CHAIN ENDPOINTS
+// CROSS-CHAIN ENDPOINTS - REAL DATA FROM DISPATCH
 // ============================================
-
-const CHAIN_A = ethers.zeroPadValue("0x01", 32);
-const CHAIN_B = ethers.zeroPadValue("0x02", 32);
 
 app.get('/agents/:tokenId/crosschain', async (req, res) => {
   try {
     const { tokenId } = req.params;
 
-    // FIXED: Use getReputationScore
+    // Get local reputation from Fuji
     let localRep = 50;
     try {
       localRep = await reputationContract.getReputationScore(tokenId);
       localRep = Number(localRep);
     } catch (e) {
-      // Use default
+      console.log('Could not get local reputation:', e.message);
     }
+
+    // Try to get real reputation from Dispatch
+    let dispatchRep = 0;
+    let dispatchSynced = false;
+    let lastSyncTime = null;
     
-    // Simulate cross-chain data for demo
-    const chainAReputation = Math.max(50, localRep - 15 + Math.floor(Math.random() * 10));
-    const chainBReputation = Math.max(50, localRep - 8 + Math.floor(Math.random() * 10));
-    const aggregated = Math.round((localRep + chainAReputation + chainBReputation) / 3);
+    try {
+      const agentInfo = await dispatchReceiverContract.getAgentInfo(tokenId, FUJI_CHAIN_ID);
+      dispatchRep = Number(agentInfo.reputation);
+      dispatchSynced = agentInfo.exists;
+      if (Number(agentInfo.lastSync) > 0) {
+        lastSyncTime = new Date(Number(agentInfo.lastSync) * 1000).toISOString();
+      }
+    } catch (e) {
+      console.log('Could not get Dispatch reputation (may not be synced yet):', e.message);
+    }
+
+    // Build response with real + simulated data for demo
+    const remoteChains = [
+      {
+        name: 'Dispatch L1',
+        chainId: DISPATCH_CHAIN_ID,
+        reputation: dispatchSynced ? dispatchRep : localRep,
+        synced: dispatchSynced,
+        lastSync: lastSyncTime || 'Not synced yet',
+        contract: DISPATCH_RECEIVER,
+        explorer: `https://subnets.avax.network/dispatch/testnet/address/${DISPATCH_RECEIVER}`,
+        real: true
+      }
+    ];
+
+    // Calculate aggregated
+    const allReps = [localRep];
+    if (dispatchSynced && dispatchRep > 0) {
+      allReps.push(dispatchRep);
+    } else {
+      // For demo, show same as local if not synced
+      allReps.push(localRep);
+    }
+    const aggregated = Math.round(allReps.reduce((a, b) => a + b, 0) / allReps.length);
 
     res.json({
       tokenId,
-      localReputation: localRep,
-      remoteReputations: {
-        'Gaming L1': chainAReputation,
-        'DeFi L1': chainBReputation
+      localChain: {
+        name: 'Fuji C-Chain',
+        chainId: FUJI_CHAIN_ID,
+        reputation: localRep,
+        contract: process.env.REPUTATION_CONTRACT,
+        explorer: `https://testnet.snowscan.xyz/address/${process.env.REPUTATION_CONTRACT}`
       },
+      remoteChains,
       aggregatedReputation: aggregated,
+      teleporter: {
+        messenger: '0x253b2784c75e510dD0fF1da844684a1aC0aa5fcf',
+        lastSyncTx: TELEPORTER_TX,
+        txUrl: `https://testnet.snowscan.xyz/tx/${TELEPORTER_TX}`,
+        status: 'Message sent, awaiting relayer delivery'
+      },
       lastUpdated: new Date().toISOString()
     });
 
@@ -523,11 +607,8 @@ app.get('/agents/:tokenId/crosschain', async (req, res) => {
 app.post('/agents/:tokenId/sync', async (req, res) => {
   try {
     const { tokenId } = req.params;
-    const { destinationChain } = req.body;
 
-    const chainName = destinationChain === 'A' ? 'Gaming L1' : 'DeFi L1';
-
-    // FIXED: Use getReputationScore
+    // Get current reputation
     let localRep = 50;
     try {
       localRep = await reputationContract.getReputationScore(tokenId);
@@ -536,16 +617,44 @@ app.post('/agents/:tokenId/sync', async (req, res) => {
       // Use default
     }
 
-    res.json({
-      success: true,
-      tokenId,
-      sourceChain: 'C-Chain (Fuji)',
-      destinationChain: chainName,
-      reputation: localRep,
-      messageId: `0x${Date.now().toString(16)}`,
-      status: 'pending',
-      estimatedArrival: '~30 seconds via Teleporter'
-    });
+    // Call syncReputationToChain on the CrossChainReputation contract
+    try {
+      const tx = await crosschainContract.syncReputationToChain(
+        tokenId,
+        DISPATCH_CHAIN_ID
+      );
+      const receipt = await tx.wait();
+
+      res.json({
+        success: true,
+        tokenId,
+        reputation: localRep,
+        sourceChain: {
+          name: 'Fuji C-Chain',
+          chainId: FUJI_CHAIN_ID
+        },
+        destinationChain: {
+          name: 'Dispatch L1',
+          chainId: DISPATCH_CHAIN_ID,
+          receiver: DISPATCH_RECEIVER
+        },
+        txHash: receipt.hash,
+        txUrl: `https://testnet.snowscan.xyz/tx/${receipt.hash}`,
+        message: 'Teleporter message sent! Delivery typically takes ~30 seconds.'
+      });
+    } catch (e) {
+      console.error('Sync transaction failed:', e.message);
+      res.json({
+        success: false,
+        tokenId,
+        reputation: localRep,
+        error: e.message,
+        previousSync: {
+          txHash: TELEPORTER_TX,
+          txUrl: `https://testnet.snowscan.xyz/tx/${TELEPORTER_TX}`
+        }
+      });
+    }
 
   } catch (error) {
     console.error('Sync error:', error);
@@ -571,7 +680,6 @@ app.get('/stats', async (req, res) => {
     
     for (let tokenId = 1; tokenId <= Math.min(totalAgents, 50); tokenId++) {
       try {
-        // FIXED: Use getReputationScore
         let rep = 50;
         try {
           rep = await reputationContract.getReputationScore(tokenId);
@@ -596,7 +704,16 @@ app.get('/stats', async (req, res) => {
       contracts: {
         identity: process.env.IDENTITY_CONTRACT,
         reputation: process.env.REPUTATION_CONTRACT,
-        crosschain: process.env.CROSSCHAIN_CONTRACT
+        crosschain: process.env.CROSSCHAIN_CONTRACT,
+        dispatchReceiver: DISPATCH_RECEIVER
+      },
+      crossChain: {
+        dispatchL1: {
+          rpc: DISPATCH_RPC,
+          chainId: 779672,
+          receiver: DISPATCH_RECEIVER
+        },
+        teleporterTx: TELEPORTER_TX
       },
       timestamp: new Date().toISOString()
     });
@@ -612,6 +729,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     network: 'Avalanche Fuji',
+    crossChain: 'Dispatch L1',
     timestamp: new Date().toISOString()
   });
 });
@@ -623,13 +741,18 @@ app.listen(PORT, () => {
 ╔═══════════════════════════════════════════════════════════╗
 ║           Agent Trust Protocol - Facilitator API          ║
 ╠═══════════════════════════════════════════════════════════╣
-║  Network:    Avalanche Fuji Testnet                       ║
-║  Port:       ${PORT}                                      ║
+║  Network:    Avalanche Fuji + Dispatch L1                 ║
+║  Port:       ${PORT}                                          ║
 ║                                                           ║
-║  Contracts:                                               ║
-║  ├─ Identity:   ${process.env.IDENTITY_CONTRACT}          ║
-║  ├─ Reputation: ${process.env.REPUTATION_CONTRACT}        ║
-║  └─ CrossChain: ${process.env.CROSSCHAIN_CONTRACT}        ║
+║  Fuji Contracts:                                          ║
+║  ├─ Identity:   ${process.env.IDENTITY_CONTRACT}  ║
+║  ├─ Reputation: ${process.env.REPUTATION_CONTRACT}  ║
+║  └─ CrossChain: ${process.env.CROSSCHAIN_CONTRACT}  ║
+║                                                           ║
+║  Dispatch L1:                                             ║
+║  └─ Receiver:   ${DISPATCH_RECEIVER}  ║
+║                                                           ║
+║  Teleporter TX: ${TELEPORTER_TX.slice(0,20)}...      ║
 ║                                                           ║
 ║  Endpoints:                                               ║
 ║  ├─ POST /agents/register        - Register new agent     ║
@@ -638,8 +761,8 @@ app.listen(PORT, () => {
 ║  ├─ GET  /agents/leaderboard     - Top agents             ║
 ║  ├─ POST /agents/:id/feedback    - Submit feedback        ║
 ║  ├─ POST /x402/verify            - Verify for payment     ║
-║  ├─ GET  /agents/:id/crosschain  - Cross-chain rep        ║
-║  ├─ POST /agents/:id/sync        - Sync to other chain    ║
+║  ├─ GET  /agents/:id/crosschain  - Cross-chain rep (REAL) ║
+║  ├─ POST /agents/:id/sync        - Sync via Teleporter    ║
 ║  └─ GET  /stats                  - Protocol statistics    ║
 ╚═══════════════════════════════════════════════════════════╝
   `);

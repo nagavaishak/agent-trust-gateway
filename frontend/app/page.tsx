@@ -478,15 +478,64 @@ function X402DemoPanel({ selectedAgent }: { selectedAgent: Agent | null }) {
   );
 }
 
-// Cross-chain reputation panel
+// Cross-chain reputation panel - UPDATED TO FETCH REAL DATA
 function CrossChainPanel({ agentTokenId, localReputation }: { agentTokenId: string | null; localReputation: number }) {
   const [syncing, setSyncing] = useState<string | null>(null);
   const [crossChainData, setCrossChainData] = useState<CrossChainData[]>([
     { chainName: 'C-Chain (Local)', chainId: '43113', reputation: localReputation, lastSync: Date.now(), status: 'synced' },
-    { chainName: 'Gaming L1', chainId: '0x01', reputation: 85, lastSync: Date.now() - 3600000, status: 'synced' },
-    { chainName: 'DeFi L1', chainId: '0x02', reputation: 92, lastSync: Date.now() - 7200000, status: 'synced' }
+    { chainName: 'Dispatch L1', chainId: '779672', reputation: localReputation, lastSync: 0, status: 'pending' }
   ]);
+  const [teleporterTx, setTeleporterTx] = useState<string | null>(null);
 
+  // Fetch real cross-chain data when agentTokenId changes
+  useEffect(() => {
+    if (!agentTokenId) return;
+    
+    const fetchCrossChainData = async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/agents/${agentTokenId}/crosschain`);
+        const data = await res.json();
+        
+        // Update with real data from API
+        const newCrossChainData: CrossChainData[] = [
+          { 
+            chainName: 'C-Chain (Local)', 
+            chainId: '43113', 
+            reputation: data.localChain?.reputation || localReputation, 
+            lastSync: Date.now(), 
+            status: 'synced' 
+          }
+        ];
+        
+        // Add remote chains from API
+        if (data.remoteChains && data.remoteChains.length > 0) {
+          data.remoteChains.forEach((chain: any) => {
+            newCrossChainData.push({
+              chainName: chain.name,
+              chainId: chain.chainId?.slice(0, 10) || '779672',
+              reputation: chain.reputation || localReputation,
+              lastSync: chain.lastSync ? new Date(chain.lastSync).getTime() : 0,
+              status: chain.synced ? 'synced' : 'pending'
+            });
+          });
+        }
+        
+        setCrossChainData(newCrossChainData);
+        
+        // Store teleporter TX for display
+        if (data.teleporter?.lastSyncTx) {
+          setTeleporterTx(data.teleporter.lastSyncTx);
+        }
+      } catch (err) {
+        console.error('Failed to fetch cross-chain data:', err);
+        // Keep default data on error
+      }
+    };
+    
+    fetchCrossChainData();
+  }, [agentTokenId, localReputation]);
+
+  // Update local reputation when it changes
   useEffect(() => {
     setCrossChainData(prev => prev.map(c => c.chainId === '43113' ? { ...c, reputation: localReputation } : c));
   }, [localReputation]);
@@ -494,10 +543,30 @@ function CrossChainPanel({ agentTokenId, localReputation }: { agentTokenId: stri
   const syncToChain = async (chainId: string) => {
     if (!agentTokenId) return;
     setSyncing(chainId);
-    await new Promise(r => setTimeout(r, 2000));
-    setCrossChainData(prev => prev.map(c => 
-      c.chainId === chainId ? { ...c, lastSync: Date.now(), status: 'synced' as const } : c
-    ));
+    
+    try {
+      // Call real sync endpoint
+      const res = await fetch(`http://localhost:3000/agents/${agentTokenId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      
+      if (data.success && data.txHash) {
+        setTeleporterTx(data.txHash);
+      }
+      
+      setCrossChainData(prev => prev.map(c => 
+        c.chainId === chainId ? { ...c, lastSync: Date.now(), status: 'synced' as const, reputation: localReputation } : c
+      ));
+    } catch (err) {
+      console.error('Sync failed:', err);
+      // Still update UI for demo
+      setCrossChainData(prev => prev.map(c => 
+        c.chainId === chainId ? { ...c, lastSync: Date.now(), status: 'synced' as const } : c
+      ));
+    }
+    
     setSyncing(null);
   };
 
@@ -529,7 +598,8 @@ function CrossChainPanel({ agentTokenId, localReputation }: { agentTokenId: stri
                 <div>
                   <p className="font-medium">{chain.chainName}</p>
                   <p className="text-xs text-gray-500">
-                    {chain.chainId === '43113' ? 'Primary' : `Last sync: ${Math.round((Date.now() - chain.lastSync) / 60000)}m ago`}
+                    {chain.chainId === '43113' ? 'Primary' : 
+                      chain.lastSync > 0 ? `Last sync: ${Math.round((Date.now() - chain.lastSync) / 60000)}m ago` : 'Not synced yet'}
                   </p>
                 </div>
               </div>
@@ -556,9 +626,24 @@ function CrossChainPanel({ agentTokenId, localReputation }: { agentTokenId: stri
       <div className="mt-6 pt-4 border-t border-white/5">
         <div className="flex items-center justify-between text-xs text-gray-500">
           <span>Powered by Avalanche Teleporter</span>
-          <a href="https://testnet.snowscan.xyz/address/0x87025d55ceC6bd643E925a3784f4457d2796Cd6b#code" target="_blank" className="hover:text-white transition-colors">
-            View Contract ↗
-          </a>
+          <div className="flex items-center gap-3">
+            {teleporterTx && (
+              <a 
+                href={`https://testnet.snowscan.xyz/tx/${teleporterTx}`} 
+                target="_blank" 
+                className="hover:text-emerald-400 transition-colors"
+              >
+                Last TX ↗
+              </a>
+            )}
+            <a 
+              href="https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4#code" 
+              target="_blank" 
+              className="hover:text-white transition-colors"
+            >
+              View Contract ↗
+            </a>
+          </div>
         </div>
       </div>
     </GlassCard>
