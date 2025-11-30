@@ -24,6 +24,42 @@ Payment-weighted on-chain reputation. Agents build credit history through their 
 
 ---
 
+## 💰 Real x402 Payments (Not Simulated!)
+
+**This is not a demo.** Our x402 server executes **real USDC transfers on-chain**.
+
+### Proof of Real Payment
+
+| Field | Value |
+|-------|-------|
+| TX Hash | [`0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71`](https://testnet.snowscan.xyz/tx/0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71) |
+| Amount | 0.005 USDC |
+| From | Agent #1 (0x7099...79C8) |
+| To | Server (0x9263...a114) |
+| Method | `transferWithAuthorization` (EIP-3009) |
+
+### How It Works
+
+```
+1. Agent requests service        → Server returns HTTP 402 + payment requirements
+2. Agent signs EIP-3009 auth     → Off-chain signature (no gas needed)
+3. Agent sends X-Payment header  → Contains signed authorization
+4. Server executes transfer      → Calls USDC.transferWithAuthorization() on-chain
+5. USDC moves on-chain           → Real transfer, visible on Snowscan
+6. Server returns service        → HTTP 200 + response
+```
+
+### Reputation-Based Pricing
+
+| Tier | Reputation | Fee Multiplier | Example ($0.01 base) |
+|------|------------|----------------|----------------------|
+| Premium | 90-100 | 0.5x | $0.005 |
+| Standard | 70-89 | 1.0x | $0.01 |
+| Basic | 50-69 | 1.5x | $0.015 |
+| Restricted | 0-49 | 2.0x | $0.02 |
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -35,8 +71,8 @@ Payment-weighted on-chain reputation. Agents build credit history through their 
 ┌─────────────────────────────────────────────────────────────────┐
 │                    x402 Payment Server                          │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ HTTP 402    │  │  Reputation  │  │   Dynamic Pricing      │  │
-│  │ Response    │──│  Check       │──│   (0.5x - 2.0x)        │  │
+│  │ HTTP 402    │  │  Reputation  │  │   Real USDC Transfer   │  │
+│  │ Response    │──│  Check       │──│   (EIP-3009)           │  │
 │  └─────────────┘  └──────────────┘  └────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -54,8 +90,8 @@ Payment-weighted on-chain reputation. Agents build credit history through their 
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Avalanche Dispatch L1                         │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │           CrossChainReputationReceiver                   │   │
-│  │           (Receives reputation from Fuji)                │   │
+│  │           CrossChainReputationReceiver                    │  │
+│  │           (Receives reputation from Fuji)                 │  │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -102,34 +138,34 @@ The transaction shows:
 
 ---
 
-## 💰 x402 Payment Flow
+## 🖥️ Frontend vs Backend
 
+### Frontend (Simulation/Demo UI)
+
+The frontend at `localhost:3001` provides a **visual demonstration** of the protocol:
+- Agent verification UI
+- Reputation display with tier badges
+- x402 payment modal (simulated click-to-pay)
+- Cross-chain reputation visualization
+
+**Note:** The frontend "Pay" button simulates the payment flow for demo purposes. This allows showing the complete UX without requiring users to have testnet USDC or connect wallets.
+
+### Backend (Real Payments)
+
+The x402 server at `localhost:4021` executes **real on-chain USDC transfers**:
+- EIP-3009 `transferWithAuthorization` signatures
+- Actual USDC moves on Avalanche Fuji
+- Transactions visible on Snowscan
+- No simulation — real blockchain state changes
+
+**To prove real payments work:**
+```bash
+# Start x402 server with real payments enabled
+REAL_PAYMENTS=true node src/x402-server.js
+
+# Run test script (executes real USDC transfer)
+node src/test-x402-real.js
 ```
-Agent                    x402 Server                 Service
-  │                           │                         │
-  │  GET /api/ai-service      │                         │
-  │ ─────────────────────────>│                         │
-  │                           │                         │
-  │  HTTP 402 + Payment Req   │                         │
-  │ <─────────────────────────│                         │
-  │                           │                         │
-  │  Sign EIP-3009 Payment    │                         │
-  │ ─────────────────────────>│                         │
-  │                           │  Verify Reputation      │
-  │                           │ ───────────────────────>│
-  │                           │                         │
-  │  HTTP 200 + Response      │                         │
-  │ <─────────────────────────│                         │
-```
-
-### Reputation Tiers & Pricing
-
-| Tier | Reputation | Fee Multiplier | Benefit |
-|------|------------|----------------|---------|
-| Premium | 90-100 | 0.5x | 50% discount |
-| Standard | 70-89 | 1.0x | Normal price |
-| Basic | 50-69 | 1.5x | 50% premium |
-| Restricted | 0-49 | 2.0x | 100% premium |
 
 ---
 
@@ -166,40 +202,50 @@ npm install
 ```bash
 # Terminal 1: Main API (port 3000)
 cd facilitator
-cp .env.example .env.fuji  # Configure with contract addresses
 node src/index.js
 
 # Terminal 2: x402 Server (port 4021)
 cd facilitator
-node src/x402-server.js
+REAL_PAYMENTS=true node src/x402-server.js  # For real payments
+# OR
+node src/x402-server.js  # For demo mode
 
-# Terminal 3: Frontend (port 3000)
+# Terminal 3: Frontend (port 3001)
 cd frontend
 npm run dev
 ```
 
-### Test the System
+### Test Real Payments
 
 ```bash
-# Register an agent
-curl -X POST http://localhost:3000/agents/register \
-  -H "Content-Type: application/json" \
-  -d '{"agentAddress": "0x...", "metadataURI": "ipfs://..."}'
+cd facilitator
 
-# Submit feedback (builds reputation)
-curl -X POST http://localhost:3000/agents/1/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"score": 1, "paymentAmount": "10"}'
-
-# Check x402 pricing
-curl "http://localhost:4021/api/payment-info?agent=0x..."
-
-# Request paid service (returns 402)
-curl -X POST http://localhost:4021/api/ai-service
-
-# Run real payment test
-node src/test-real-payment.js
+# Test the complete x402 payment flow
+node src/test-x402-real.js
 ```
+
+Expected output:
+```
+✅ PAYMENT SUCCESSFUL!
+Status: 200
+TX Hash: 0x858c761094390b6f...
+Real Payment: true
+Explorer: https://testnet.snowscan.xyz/tx/0x858c...
+Server USDC: 1.005000 USDC  # Balance increased!
+```
+
+---
+
+## 🧪 Test Agents
+
+We have 4 agents registered with different reputation tiers:
+
+| Agent | Address | Reputation | Tier | Fee |
+|-------|---------|------------|------|-----|
+| #1 | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` | 100 | Premium | 0.5x |
+| #2 | `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` | 75 | Standard | 1.0x |
+| #3 | `0x90F79bf6EB2c4f870365E785982E1f101E93b906` | 60 | Basic | 1.5x |
+| #4 | `0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65` | 30 | Restricted | 2.0x |
 
 ---
 
@@ -220,11 +266,11 @@ agent-trust-protocol/
 ├── facilitator/
 │   └── src/
 │       ├── index.js                    # Main API server
-│       ├── x402-server.js              # x402 payment server
-│       └── test-real-payment.js        # Payment flow test
+│       ├── x402-server.js              # x402 payment server (REAL payments!)
+│       └── test-x402-real.js           # Payment test script
 ├── frontend/
 │   └── app/
-│       └── page.tsx                    # Dashboard UI
+│       └── page.tsx                    # Dashboard UI (demo)
 ├── PRECOMPILE_ARCHITECTURE.md          # Future: Native VM integration
 └── README.md
 ```
@@ -254,6 +300,7 @@ agent-trust-protocol/
 | GET | `/api/premium-data` | $0.001 USDC | Real-time market data |
 | GET | `/api/discover-agents` | $0.005 USDC | Find high-rep agents |
 | GET | `/api/payment-info` | Free | Get pricing for agent |
+| GET | `/api/balance` | Free | Check server USDC balance |
 
 ---
 
@@ -293,7 +340,20 @@ See [PRECOMPILE_ARCHITECTURE.md](./PRECOMPILE_ARCHITECTURE.md) for our vision of
 - **Frontend:** Next.js, React, TailwindCSS
 - **Blockchain:** Avalanche Fuji C-Chain, Dispatch L1
 - **Cross-Chain:** Teleporter / ICM
-- **Payments:** x402 Protocol, EIP-3009
+- **Payments:** x402 Protocol, EIP-3009 `transferWithAuthorization`
+
+---
+
+## 📊 On-Chain Proof Summary
+
+| What | Proof |
+|------|-------|
+| Real USDC Payment | [TX: 0x858c7610...](https://testnet.snowscan.xyz/tx/0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71) |
+| Teleporter Message | [TX: 0xd3e9c290...](https://testnet.snowscan.xyz/tx/0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff) |
+| AgentIdentity Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412#code) |
+| ReputationRegistry Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4#code) |
+| CrossChainReputation Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4#code) |
+| Dispatch Receiver Contract | [Deployed](https://subnets.avax.network/dispatch/testnet/address/0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8) |
 
 ---
 
@@ -308,3 +368,12 @@ MIT
 **Avalanche x402 Hack2Build 2025**
 
 Built by [Naga](https://github.com/nagavaishak)
+
+---
+
+### Key Differentiators
+
+1. **Real Payments** — Not simulated. USDC actually moves on-chain.
+2. **Real Cross-Chain** — Teleporter message sent with on-chain proof.
+3. **Real Reputation** — Payment-weighted scoring stored on-chain.
+4. **Production Architecture** — Precompile design doc for mainnet scaling.
