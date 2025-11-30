@@ -10,9 +10,13 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================
-// DEMO MODE - Set to true for hackathon demo
+// MODE CONFIGURATION
 // ============================================
-const DEMO_MODE = process.env.DEMO_MODE === 'true' || true;
+// Set REAL_PAYMENTS=true to execute actual on-chain USDC transfers
+const REAL_PAYMENTS = process.env.REAL_PAYMENTS === 'true' || false;
+const DEMO_MODE = !REAL_PAYMENTS;
+
+console.log(`Payment Mode: ${REAL_PAYMENTS ? '💰 REAL PAYMENTS' : '🧪 DEMO MODE'}`);
 
 // ============================================
 // x402 CONFIGURATION FOR AVALANCHE FUJI
@@ -22,11 +26,19 @@ const X402_CONFIG = {
   network: 'avalanche-fuji',
   chainId: 43113,
   usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65',
-  facilitatorUrl: 'https://facilitator.payai.network',
   payToAddress: process.env.SERVER_WALLET || '0x9263c9114a3c9192fac7890067369a656075a114',
 };
 
-// Contract setup for reputation check
+// USDC ABI for transferWithAuthorization (EIP-3009)
+const USDC_ABI = [
+  "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) external",
+  "function balanceOf(address account) external view returns (uint256)",
+  "function name() external view returns (string)",
+  "function version() external view returns (string)",
+  "function nonces(address owner) external view returns (uint256)"
+];
+
+// Contract setup
 const REPUTATION_ABI = [
   "function getReputationScore(uint256 agentTokenId) external view returns (uint256)"
 ];
@@ -36,7 +48,15 @@ const IDENTITY_ABI = [
   "function isRegisteredAgent(address agent) external view returns (bool)"
 ];
 
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+// Provider and wallet for executing transactions
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL, {
+  chainId: 43113,
+  name: 'avalanche-fuji'
+});
+const serverWallet = new ethers.Wallet(process.env.SERVER_PRIVATE_KEY, provider);
+
+// Contract instances
+const usdcContract = new ethers.Contract(X402_CONFIG.usdcAddress, USDC_ABI, serverWallet);
 
 const identityContract = new ethers.Contract(
   process.env.IDENTITY_CONTRACT,
@@ -50,15 +70,29 @@ const reputationContract = new ethers.Contract(
   provider
 );
 
-// Helper functions
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function validateAddress(address) {
+  try {
+    return ethers.getAddress(address);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function getFeeMultiplier(agentAddress) {
   try {
     if (!agentAddress) return 2.0;
     
-    const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
+    const validAddress = validateAddress(agentAddress);
+    if (!validAddress) return 2.0;
+    
+    const isRegistered = await identityContract.isRegisteredAgent(validAddress);
     if (!isRegistered) return 2.0;
 
-    const tokenId = await identityContract.agentToTokenId(agentAddress);
+    const tokenId = await identityContract.agentToTokenId(validAddress);
     const reputation = await reputationContract.getReputationScore(tokenId);
     const rep = Number(reputation);
 
@@ -76,10 +110,13 @@ async function getReputationScore(agentAddress) {
   try {
     if (!agentAddress) return 50;
     
-    const isRegistered = await identityContract.isRegisteredAgent(agentAddress);
+    const validAddress = validateAddress(agentAddress);
+    if (!validAddress) return 0;
+    
+    const isRegistered = await identityContract.isRegisteredAgent(validAddress);
     if (!isRegistered) return 0;
 
-    const tokenId = await identityContract.agentToTokenId(agentAddress);
+    const tokenId = await identityContract.agentToTokenId(validAddress);
     const reputation = await reputationContract.getReputationScore(tokenId);
     return Number(reputation);
   } catch (e) {
@@ -111,73 +148,147 @@ function createPaymentRequirements(basePrice, feeMultiplier, resource, descripti
     asset: X402_CONFIG.usdcAddress,
     extra: {
       name: 'USD Coin',
-      version: '2'
+      version: '2',
+      chainId: 43113
     }
   };
 }
 
-// Verify payment with facilitator
-async function verifyPaymentWithFacilitator(paymentHeader, paymentRequirements) {
-  try {
-    const response = await fetch(`${X402_CONFIG.facilitatorUrl}/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paymentPayload: JSON.parse(Buffer.from(paymentHeader, 'base64').toString()),
-        paymentRequirements: paymentRequirements
-      })
-    });
+// ============================================
+// REAL PAYMENT VERIFICATION (EIP-3009)
+// ============================================
 
-    const result = await response.json();
-    return result;
+async function executeRealPayment(paymentHeader, paymentRequirements) {
+  try {
+    // Decode the payment payload
+    const payloadStr = Buffer.from(paymentHeader, 'base64').toString();
+    const payload = JSON.parse(payloadStr);
+    
+    console.log('[REAL] Processing payment...');
+    
+    if (!payload.payload || !payload.payload.authorization || !payload.payload.signature) {
+      return { isValid: false, error: 'Invalid payload structure' };
+    }
+
+    const auth = payload.payload.authorization;
+    const sig = payload.payload.signature;
+
+    // Validate payment amount
+    const requiredAmount = BigInt(paymentRequirements.maxAmountRequired);
+    const providedAmount = BigInt(auth.value);
+    
+    if (providedAmount < requiredAmount) {
+      return { isValid: false, error: `Insufficient payment: ${providedAmount} < ${requiredAmount}` };
+    }
+
+    // Validate recipient
+    if (auth.to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
+      return { isValid: false, error: 'Payment recipient mismatch' };
+    }
+
+    // Validate not expired
+    const now = Math.floor(Date.now() / 1000);
+    if (parseInt(auth.validBefore) < now) {
+      return { isValid: false, error: 'Authorization expired' };
+    }
+
+    // Parse signature
+    const signature = sig.startsWith('0x') ? sig : `0x${sig}`;
+    const { v, r, s } = ethers.Signature.from(signature);
+
+    console.log('[REAL] Executing transferWithAuthorization on-chain...');
+    console.log(`  From: ${auth.from}`);
+    console.log(`  To: ${auth.to}`);
+    console.log(`  Value: ${auth.value} (${Number(auth.value) / 1_000_000} USDC)`);
+
+    // Execute the transfer on-chain
+    const tx = await usdcContract.transferWithAuthorization(
+      auth.from,           // from
+      auth.to,             // to
+      auth.value,          // value
+      auth.validAfter,     // validAfter
+      auth.validBefore,    // validBefore
+      auth.nonce,          // nonce
+      v,                   // v
+      r,                   // r
+      s                    // s
+    );
+
+    console.log(`[REAL] TX submitted: ${tx.hash}`);
+    
+    // Wait for confirmation
+    const receipt = await tx.wait();
+    
+    console.log(`[REAL] ✅ TX confirmed in block ${receipt.blockNumber}`);
+    console.log(`[REAL] 🔗 https://testnet.snowscan.xyz/tx/${tx.hash}`);
+
+    return {
+      isValid: true,
+      txHash: tx.hash,
+      blockNumber: receipt.blockNumber,
+      settledAt: new Date().toISOString(),
+      explorerUrl: `https://testnet.snowscan.xyz/tx/${tx.hash}`
+    };
+
   } catch (e) {
-    console.error('Facilitator verification error:', e.message);
+    console.error('[REAL] Payment execution error:', e.message);
+    
+    // Parse common errors
+    if (e.message.includes('authorization is used')) {
+      return { isValid: false, error: 'Authorization already used (nonce reused)' };
+    }
+    if (e.message.includes('insufficient')) {
+      return { isValid: false, error: 'Insufficient USDC balance' };
+    }
+    if (e.message.includes('invalid signature')) {
+      return { isValid: false, error: 'Invalid signature' };
+    }
+    
     return { isValid: false, error: e.message };
   }
 }
 
-// Demo mode verification - validates signature locally
+// Demo mode verification (local only, no on-chain transfer)
 async function verifyPaymentDemo(paymentHeader, paymentRequirements) {
   try {
     const payload = JSON.parse(Buffer.from(paymentHeader, 'base64').toString());
     
     console.log('[DEMO] Verifying payment locally...');
-    console.log('[DEMO] Payment payload:', JSON.stringify(payload, null, 2));
 
-    // Validate payload structure
     if (!payload.payload || !payload.payload.signature || !payload.payload.authorization) {
       return { isValid: false, error: 'Invalid payload structure' };
     }
 
     const auth = payload.payload.authorization;
     
-    // Verify amount matches
+    // Verify amount
     if (BigInt(auth.value) < BigInt(paymentRequirements.maxAmountRequired)) {
       return { isValid: false, error: 'Insufficient payment amount' };
     }
 
-    // Verify recipient matches
+    // Verify recipient
     if (auth.to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
       return { isValid: false, error: 'Payment recipient mismatch' };
     }
 
-    // Verify signature is valid EIP-712 (basic check)
+    // Verify signature format
     if (!payload.payload.signature || payload.payload.signature.length !== 132) {
       return { isValid: false, error: 'Invalid signature format' };
     }
 
-    // Verify timestamp
+    // Verify not expired
     const now = Math.floor(Date.now() / 1000);
     if (parseInt(auth.validBefore) < now) {
       return { isValid: false, error: 'Authorization expired' };
     }
 
-    console.log('[DEMO] ✅ Payment verified successfully');
+    console.log('[DEMO] ✅ Payment verified (demo mode - no on-chain transfer)');
     
     return { 
       isValid: true,
       txHash: `0x${Date.now().toString(16)}${'0'.repeat(48)}`.slice(0, 66),
-      settledAt: new Date().toISOString()
+      settledAt: new Date().toISOString(),
+      demoMode: true
     };
   } catch (e) {
     console.error('[DEMO] Verification error:', e.message);
@@ -187,10 +298,10 @@ async function verifyPaymentDemo(paymentHeader, paymentRequirements) {
 
 // Main verification function
 async function verifyPayment(paymentHeader, paymentRequirements) {
-  if (DEMO_MODE) {
-    return verifyPaymentDemo(paymentHeader, paymentRequirements);
+  if (REAL_PAYMENTS) {
+    return executeRealPayment(paymentHeader, paymentRequirements);
   } else {
-    return verifyPaymentWithFacilitator(paymentHeader, paymentRequirements);
+    return verifyPaymentDemo(paymentHeader, paymentRequirements);
   }
 }
 
@@ -230,24 +341,25 @@ function x402Paywall(basePrice, resourceName, description) {
           finalPrice: basePrice * feeMultiplier,
           discount: feeMultiplier < 1 ? `${((1 - feeMultiplier) * 100).toFixed(0)}% reputation discount` : null,
           premium: feeMultiplier > 1 ? `${((feeMultiplier - 1) * 100).toFixed(0)}% premium` : null
-        }
+        },
+        paymentMode: REAL_PAYMENTS ? 'real' : 'demo'
       });
     }
 
-    // Verify payment
-    console.log(`[x402] Verifying payment for ${resourceName}...`);
+    // Verify/Execute payment
+    console.log(`[x402] ${REAL_PAYMENTS ? 'Executing' : 'Verifying'} payment for ${resourceName}...`);
     const verification = await verifyPayment(paymentHeader, paymentRequirements);
 
     if (!verification.isValid) {
-      console.log(`[x402] Payment verification failed: ${verification.error || 'Unknown'}`);
+      console.log(`[x402] Payment failed: ${verification.error || 'Unknown'}`);
       return res.status(402).json({
-        error: 'Payment Invalid',
+        error: 'Payment Failed',
         message: verification.error || 'Payment verification failed',
         accepts: [paymentRequirements]
       });
     }
 
-    console.log(`[x402] ✅ Payment verified! TX: ${verification.txHash}`);
+    console.log(`[x402] ✅ Payment successful! TX: ${verification.txHash}`);
 
     // Attach payment info to request
     req.x402 = {
@@ -258,8 +370,10 @@ function x402Paywall(basePrice, resourceName, description) {
       tier,
       feeMultiplier,
       txHash: verification.txHash,
+      blockNumber: verification.blockNumber,
+      explorerUrl: verification.explorerUrl,
       settledAt: verification.settledAt,
-      demoMode: DEMO_MODE
+      realPayment: REAL_PAYMENTS
     };
 
     next();
@@ -277,7 +391,7 @@ app.post('/api/ai-service',
     
     res.json({
       success: true,
-      result: `Analysis complete for prompt: "${prompt || 'market analysis'}". Based on on-chain data and market sentiment, AVAX shows bullish momentum with 78% confidence. Key support at $38, resistance at $48.`,
+      result: `Analysis complete for prompt: "${prompt || 'market analysis'}". Based on on-chain data and market sentiment, AVAX shows bullish momentum with 78% confidence.`,
       model: 'gpt-4-turbo',
       tokens_used: 847,
       payment: req.x402
@@ -294,8 +408,7 @@ app.get('/api/premium-data',
         btc_price: 97432.50 + Math.random() * 1000,
         eth_price: 3421.80 + Math.random() * 100,
         avax_price: 42.15 + Math.random() * 5,
-        timestamp: new Date().toISOString(),
-        source: 'premium-feed-v2'
+        timestamp: new Date().toISOString()
       },
       payment: req.x402
     });
@@ -308,8 +421,8 @@ app.get('/api/discover-agents',
     res.json({
       success: true,
       agents: [
-        { address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', reputation: 100, tier: 'premium', specialty: 'DeFi Analysis' },
-        { address: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC', reputation: 85, tier: 'standard', specialty: 'NFT Valuation' }
+        { address: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', reputation: 100, tier: 'premium' },
+        { address: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC', reputation: 75, tier: 'standard' }
       ],
       payment: req.x402
     });
@@ -325,6 +438,15 @@ app.get('/api/payment-info', async (req, res) => {
   const feeMultiplier = await getFeeMultiplier(agentAddress);
   const reputation = await getReputationScore(agentAddress);
   const tier = getTier(reputation);
+
+  // Get server USDC balance
+  let serverBalance = '0';
+  try {
+    const balance = await usdcContract.balanceOf(X402_CONFIG.payToAddress);
+    serverBalance = (Number(balance) / 1_000_000).toFixed(6);
+  } catch (e) {
+    console.error('Error getting balance:', e.message);
+  }
 
   res.json({
     services: [
@@ -359,41 +481,29 @@ app.get('/api/payment-info', async (req, res) => {
       tier,
       feeMultiplier
     },
-    x402Config: {
+    server: {
+      wallet: X402_CONFIG.payToAddress,
+      usdcBalance: serverBalance,
       network: X402_CONFIG.network,
-      chainId: X402_CONFIG.chainId,
-      usdcAddress: X402_CONFIG.usdcAddress,
-      facilitator: DEMO_MODE ? 'local-demo' : X402_CONFIG.facilitatorUrl,
-      payTo: X402_CONFIG.payToAddress
+      chainId: X402_CONFIG.chainId
     },
-    demoMode: DEMO_MODE
+    paymentMode: REAL_PAYMENTS ? 'real' : 'demo',
+    realPaymentsEnabled: REAL_PAYMENTS
   });
 });
 
-app.get('/api/facilitator-status', async (req, res) => {
-  if (DEMO_MODE) {
-    return res.json({
-      status: 'demo-mode',
-      message: 'Running in demo mode with local verification',
-      facilitator: 'local'
-    });
-  }
-
+app.get('/api/balance', async (req, res) => {
   try {
-    const response = await fetch(`${X402_CONFIG.facilitatorUrl}/supported`);
-    const supported = await response.json();
-    
+    const balance = await usdcContract.balanceOf(X402_CONFIG.payToAddress);
     res.json({
-      status: 'online',
-      facilitator: X402_CONFIG.facilitatorUrl,
-      supportedNetworks: supported
+      address: X402_CONFIG.payToAddress,
+      balance: balance.toString(),
+      balanceFormatted: (Number(balance) / 1_000_000).toFixed(6),
+      currency: 'USDC',
+      network: 'avalanche-fuji'
     });
   } catch (e) {
-    res.json({
-      status: 'offline',
-      facilitator: X402_CONFIG.facilitatorUrl,
-      error: e.message
-    });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -402,7 +512,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'x402-server',
     network: 'avalanche-fuji',
-    demoMode: DEMO_MODE,
+    paymentMode: REAL_PAYMENTS ? 'real' : 'demo',
     timestamp: new Date().toISOString()
   });
 });
@@ -420,7 +530,9 @@ app.listen(PORT, () => {
 ║  Network:     Avalanche Fuji Testnet                      ║
 ║  Chain ID:    43113                                       ║
 ║  Port:        ${PORT}                                         ║
-║  Demo Mode:   ${DEMO_MODE ? '✅ ENABLED' : '❌ DISABLED'}                                  ║
+║  Payment:     ${REAL_PAYMENTS ? '💰 REAL (on-chain USDC)' : '🧪 DEMO (local verification)'}           ║
+║                                                           ║
+║  Server Wallet: ${X402_CONFIG.payToAddress}  ║
 ║                                                           ║
 ║  PAID Endpoints (require x402 payment):                   ║
 ║  ├─ POST /api/ai-service      - $0.01 USDC               ║
@@ -429,8 +541,10 @@ app.listen(PORT, () => {
 ║                                                           ║
 ║  FREE Endpoints:                                          ║
 ║  ├─ GET  /api/payment-info    - Get pricing info         ║
-║  ├─ GET  /api/facilitator-status - Check facilitator     ║
+║  ├─ GET  /api/balance         - Check server USDC        ║
 ║  └─ GET  /health              - Health check             ║
+║                                                           ║
+║  To enable real payments: REAL_PAYMENTS=true              ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
 });
