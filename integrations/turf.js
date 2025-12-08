@@ -17,6 +17,9 @@ const TURF_CONFIG = {
   // API key
   apiKey: process.env.TURF_API_KEY || '',
   
+  // Demo mode - uses realistic mock data for hackathon demos
+  demoMode: process.env.TURF_DEMO_MODE !== 'false',
+  
   // Cache TTL (seconds)
   cacheTTL: 300,
   
@@ -26,6 +29,26 @@ const TURF_CONFIG = {
     provenanceScore: 0.25,
     activityScore: 0.25,
     networkScore: 0.2
+  }
+};
+
+// Demo profiles for known test agents
+const DEMO_PROFILES = {
+  '0x70997970c51812dc3a010c7d01b50e0d17dc79c8': {
+    behaviorScore: 95, provenanceScore: 92, activityScore: 88, networkScore: 90,
+    flags: [], metadata: { tier: 'premium', source: 'turf-demo' }
+  },
+  '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc': {
+    behaviorScore: 78, provenanceScore: 75, activityScore: 80, networkScore: 72,
+    flags: [], metadata: { tier: 'standard', source: 'turf-demo' }
+  },
+  '0x90f79bf6eb2c4f870365e785982e1f101e93b906': {
+    behaviorScore: 62, provenanceScore: 58, activityScore: 65, networkScore: 55,
+    flags: [], metadata: { tier: 'basic', source: 'turf-demo' }
+  },
+  '0x15d34aaf54267db7d7c367839aaf71a00a2c6a65': {
+    behaviorScore: 35, provenanceScore: 40, activityScore: 30, networkScore: 25,
+    flags: ['high_risk'], metadata: { tier: 'restricted', source: 'turf-demo' }
   }
 };
 
@@ -63,6 +86,16 @@ class TurfIntegration {
     // Check cache first
     const cached = this._getFromCache(agentAddress);
     if (cached) return cached;
+    
+    // Demo mode: return realistic mock data
+    if (this.config.demoMode) {
+      const demoProfile = DEMO_PROFILES[agentAddress.toLowerCase()];
+      if (demoProfile) {
+        const profile = { address: agentAddress, ...demoProfile };
+        this._setCache(agentAddress, profile);
+        return profile;
+      }
+    }
     
     try {
       // If Turf API is configured, fetch from API

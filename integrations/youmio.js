@@ -19,6 +19,9 @@ const YOUMIO_CONFIG = {
   // API key
   apiKey: process.env.YOUMIO_API_KEY || '',
   
+  // Demo mode - uses realistic mock data
+  demoMode: process.env.YOUMIO_DEMO_MODE !== 'false',
+  
   // DID method
   didMethod: 'did:youmio',
   
@@ -27,6 +30,41 @@ const YOUMIO_CONFIG = {
   
   // Cache TTL (seconds)
   cacheTTL: 600
+};
+
+// Demo credentials for known test agents
+const DEMO_CREDENTIALS = {
+  '0x70997970c51812dc3a010c7d01b50e0d17dc79c8': {
+    did: 'did:youmio:premium-agent-001',
+    verified: true,
+    status: 'active',
+    credentials: ['verified_operator', 'premium_tier', 'kyc_passed'],
+    name: 'Premium AI Agent',
+    description: 'High-performance trading agent',
+    createdAt: '2024-06-15T00:00:00Z',
+    capabilities: ['trading', 'analysis', 'execution']
+  },
+  '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc': {
+    did: 'did:youmio:standard-agent-002',
+    verified: true,
+    status: 'active',
+    credentials: ['verified_operator'],
+    name: 'Standard Agent',
+    description: 'General purpose agent',
+    createdAt: '2024-09-01T00:00:00Z',
+    capabilities: ['general']
+  },
+  '0x90f79bf6eb2c4f870365e785982e1f101e93b906': {
+    did: 'did:youmio:basic-agent-003',
+    verified: true,
+    status: 'active',
+    credentials: [],
+    name: 'Basic Agent',
+    description: 'Basic operations agent',
+    createdAt: '2024-11-01T00:00:00Z',
+    capabilities: ['basic']
+  }
+  // Note: Restricted agent (0x15d34...) intentionally not in Youmio = no trust boost
 };
 
 // ============================================
@@ -108,6 +146,15 @@ class YoumioIntegration {
   async getAgentByAddress(address) {
     const cached = this._getFromCache(`addr:${address}`);
     if (cached) return cached;
+    
+    // Demo mode: return realistic mock data
+    if (this.config.demoMode) {
+      const demoAgent = DEMO_CREDENTIALS[address.toLowerCase()];
+      if (demoAgent) {
+        this._setCache(`addr:${address}`, demoAgent);
+        return demoAgent;
+      }
+    }
     
     try {
       if (this.config.apiKey) {
