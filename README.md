@@ -1,62 +1,57 @@
-# Agent Trust Protocol
+# AgentTrust Gateway
 
-> Decentralized Credit Scores for AI Agents on Avalanche
+> **The Cloudflare for x402 APIs** — Drop-in trust middleware that enforces identity, reputation, staking, and economic security **before** payment settles.
 
-**Built for Avalanche x402 Hack2Build 2025**
+[![Avalanche](https://img.shields.io/badge/Avalanche-Fuji-red)](https://testnet.snowscan.xyz)
+[![x402](https://img.shields.io/badge/x402-Compatible-blue)](https://www.x402.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+```javascript
+import { AgentTrust } from '@agent-trust/gateway';
+
+app.use('/api/gpt4', AgentTrust.protect({
+  minStake: '0.5',    // 0.5 AVAX required
+  minScore: 80,       // 80+ reputation
+  basePrice: 0.05     // Dynamic pricing from $0.025-$0.075
+}));
+```
+
+**Two lines. Full protection.**
 
 ---
 
-## 🎯 Overview
+## 🎯 The Problem
 
-Agent Trust Protocol creates a **decentralized credit score system for AI agents** by combining:
+When APIs adopt x402 pay-per-call pricing, they face immediate threats:
 
-- **ERC-8004** — Agent identity standard (NFT-based passports)
-- **x402 Protocol** — HTTP payment gating with reputation-based pricing
-- **Teleporter** — Cross-chain reputation sync across Avalanche L1s
+| Attack | Description | Impact |
+|--------|-------------|--------|
+| **Spam Floods** | Bots making millions of micro-payments | Infrastructure overload |
+| **Economic DoS** | Adversaries paying to waste compute | $$$$ in GPU costs |
+| **Sybil Attacks** | Fake agents gaming reputation | Trust collapse |
+| **Flash Loan Exploits** | Stake → abuse → unstake in one block | Zero accountability |
 
-### The Problem
-
-As AI agents proliferate, how do you know which ones to trust? Current solutions rely on centralized reputation systems that can be gamed.
-
-### The Solution
-
-Payment-weighted on-chain reputation. Agents build credit history through their payment interactions — larger payments carry more weight. This reputation travels with them across Avalanche L1s via Teleporter.
+**x402 answers "can you pay?" but not "should we serve you?"**
 
 ---
 
-## 💰 Real x402 Payments (Not Simulated!)
+## 💡 The Solution
 
-**This is not a demo.** Our x402 server executes **real USDC transfers on-chain**.
-
-### Proof of Real Payment
-
-| Field | Value |
-|-------|-------|
-| TX Hash | [`0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71`](https://testnet.snowscan.xyz/tx/0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71) |
-| Amount | 0.005 USDC |
-| From | Agent #1 (0x7099...79C8) |
-| To | Server (0x9263...a114) |
-| Method | `transferWithAuthorization` (EIP-3009) |
-
-### How It Works
+AgentTrust Gateway is the **missing trust layer** for x402:
 
 ```
-1. Agent requests service        → Server returns HTTP 402 + payment requirements
-2. Agent signs EIP-3009 auth     → Off-chain signature (no gas needed)
-3. Agent sends X-Payment header  → Contains signed authorization
-4. Server executes transfer      → Calls USDC.transferWithAuthorization() on-chain
-5. USDC moves on-chain           → Real transfer, visible on Snowscan
-6. Server returns service        → HTTP 200 + response
+Request → PoW Check → Stake Verify → Rep Check → Risk Score → Dynamic Price → Payment → Execute
+         ─────────────────── BEFORE PAYMENT ───────────────────
 ```
 
-### Reputation-Based Pricing
+### What It Does
 
-| Tier | Reputation | Fee Multiplier | Example ($0.01 base) |
-|------|------------|----------------|----------------------|
-| Premium | 90-100 | 0.5x | $0.005 |
-| Standard | 70-89 | 1.0x | $0.01 |
-| Basic | 50-69 | 1.5x | $0.015 |
-| Restricted | 0-49 | 2.0x | $0.02 |
+✅ **Gates access** — Block agents below stake/reputation thresholds  
+✅ **Dynamic pricing** — Good agents pay less, risky agents pay more  
+✅ **Session tokens** — Macaroons for fast re-authentication  
+✅ **DDoS protection** — PoW challenges before heavy verification  
+✅ **Flash loan defense** — 1-hour unbonding delay on stakes  
+✅ **Anti-sybil** — Diversity-weighted reputation scoring  
 
 ---
 
@@ -64,188 +59,225 @@ Payment-weighted on-chain reputation. Agents build credit history through their 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        AI Agent                                 │
+│                      AgentTrust Gateway                         │
+│                                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
+│  │   PoW    │→ │  Stake   │→ │   Rep    │→ │  Price   │→ x402 │
+│  │  Check   │  │  Verify  │  │  Check   │  │  Calc    │       │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │
+│       ↓              ↓            ↓             ↓              │
+│  ┌─────────────────────────────────────────────────────────────┐
+│  │              On-Chain Contracts (Fuji)                      │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │  │ AgentReg    │ │  Staking    │ │ Reputation  │           │
+│  │  │ (ERC-721)   │ │  Module     │ │  Engine     │           │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘           │
+│  └─────────────────────────────────────────────────────────────┘
+│                                                                 │
+│  Sponsors: Thirdweb (payments) │ Turf (behavior) │ Youmio (DIDs)│
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    x402 Payment Server                          │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ HTTP 402    │  │  Reputation  │  │   Real USDC Transfer   │  │
-│  │ Response    │──│  Check       │──│   (EIP-3009)           │  │
-│  └─────────────┘  └──────────────┘  └────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Avalanche Fuji C-Chain                        │
-│  ┌─────────────────┐  ┌───────────────┐  ┌──────────────────┐   │
-│  │ AgentIdentity   │  │ Reputation    │  │ CrossChain       │   │
-│  │ (ERC-721)       │──│ Registry      │──│ Reputation       │   │
-│  └─────────────────┘  └───────────────┘  └──────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Teleporter
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Avalanche Dispatch L1                         │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │           CrossChainReputationReceiver                    │  │
-│  │           (Receives reputation from Fuji)                 │  │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 📜 Smart Contracts
-
-### Fuji C-Chain (Chain ID: 43113)
-
-| Contract | Address | Verified |
-|----------|---------|----------|
-| AgentIdentity | [`0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412`](https://testnet.snowscan.xyz/address/0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412) | ✅ |
-| ReputationRegistry | [`0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4`](https://testnet.snowscan.xyz/address/0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4) | ✅ |
-| CrossChainReputation | [`0x5c8dfe8484423a9370AcC451Af0083F103eA48d4`](https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4) | ✅ |
-
-### Dispatch L1 (Chain ID: 779672)
-
-| Contract | Address | Purpose |
-|----------|---------|---------|
-| CrossChainReputationReceiver | [`0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8`](https://subnets.avax.network/dispatch/testnet/address/0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8) | Receives reputation from Fuji |
-
-### Cross-Chain Configuration
-
-| Chain | Blockchain ID |
-|-------|---------------|
-| Fuji C-Chain | `0x7fc93d85c6d62c5b2ac0b519c87010ea5294012d1e407030d6acd0021cac10d5` |
-| Dispatch | `0x9f3be606497285d0ffbb5ac9ba24aa60346a9b1812479ed66cb329f394a4b1c7` |
-
-**Teleporter Messenger:** `0x253b2784c75e510dD0fF1da844684a1aC0aa5fcf` (same on all chains)
-
----
-
-## 🔗 Cross-Chain Proof
-
-We sent a **real Teleporter message** syncing Agent #1's reputation from Fuji to Dispatch:
-
-**Transaction:** [`0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff`](https://testnet.snowscan.xyz/tx/0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff)
-
-The transaction shows:
-- Teleporter Messenger contract called
-- Warp precompile (`0x0200000000000000000000000000000000000005`) emitted cross-chain message
-- Agent #1's reputation score (100) encoded in payload
-
----
-
-## 🖥️ Frontend vs Backend
-
-### Frontend (Simulation/Demo UI)
-
-The frontend at `localhost:3001` provides a **visual demonstration** of the protocol:
-- Agent verification UI
-- Reputation display with tier badges
-- x402 payment modal (simulated click-to-pay)
-- Cross-chain reputation visualization
-
-**Note:** The frontend "Pay" button simulates the payment flow for demo purposes. This allows showing the complete UX without requiring users to have testnet USDC or connect wallets.
-
-### Backend (Real Payments)
-
-The x402 server at `localhost:4021` executes **real on-chain USDC transfers**:
-- EIP-3009 `transferWithAuthorization` signatures
-- Actual USDC moves on Avalanche Fuji
-- Transactions visible on Snowscan
-- No simulation — real blockchain state changes
-
-**To prove real payments work:**
-```bash
-# Start x402 server with real payments enabled
-REAL_PAYMENTS=true node src/x402-server.js
-
-# Run test script (executes real USDC transfer)
-node src/test-x402-real.js
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Node.js 18+
-- Foundry (forge, cast)
-- Git
-
 ### Installation
 
 ```bash
-# Clone the repo
-git clone https://github.com/nagavaishak/agent-trust-protocol.git
-cd agent-trust-protocol
-
-# Install contract dependencies
-cd contracts
-forge install
-
-# Install facilitator dependencies
-cd ../facilitator
-npm install
-
-# Install frontend dependencies
-cd ../frontend
-npm install
+npm install @agent-trust/gateway
 ```
 
-### Run Locally
+### Basic Usage
 
-```bash
-# Terminal 1: Main API (port 3000)
-cd facilitator
-node src/index.js
+```javascript
+const express = require('express');
+const { AgentTrust } = require('@agent-trust/gateway');
 
-# Terminal 2: x402 Server (port 4021)
-cd facilitator
-REAL_PAYMENTS=true node src/x402-server.js  # For real payments
-# OR
-node src/x402-server.js  # For demo mode
+const app = express();
 
-# Terminal 3: Frontend (port 3001)
-cd frontend
-npm run dev
+// Protect your expensive AI endpoint
+app.post('/api/gpt4', AgentTrust.protect({
+  minStake: '1',        // 1 AVAX minimum stake
+  minScore: 80,         // 80+ reputation required
+  basePrice: 0.05,      // $0.05 USDC base price
+  network: 'fuji'
+}), (req, res) => {
+  // Only verified, staked, reputable agents reach here
+  console.log('Agent:', req.agentTrust.address);
+  console.log('Reputation:', req.agentTrust.reputation);
+  console.log('Price paid:', req.agentTrust.pricing.finalPrice);
+  
+  res.json({ result: 'Premium AI response' });
+});
+
+app.listen(3000);
 ```
 
-### Test Real Payments
+### With Sponsor Integrations
 
-```bash
-cd facilitator
+```javascript
+const { AgentTrust } = require('@agent-trust/gateway');
+const { verifyPayment, enrichWithTurf, enrichWithYoumio } = require('@agent-trust/gateway/integrations');
 
-# Test the complete x402 payment flow
-node src/test-x402-real.js
-```
-
-Expected output:
-```
-✅ PAYMENT SUCCESSFUL!
-Status: 200
-TX Hash: 0x858c761094390b6f...
-Real Payment: true
-Explorer: https://testnet.snowscan.xyz/tx/0x858c...
-Server USDC: 1.005000 USDC  # Balance increased!
+app.post('/api/premium',
+  AgentTrust.protect({ minStake: '1', minScore: 80 }),
+  verifyPayment({ network: 'fuji' }),      // Thirdweb settlement
+  enrichWithTurf(),                         // Behavioral scoring
+  enrichWithYoumio(),                       // DID verification
+  (req, res) => {
+    // Full trust stack applied
+    res.json({ result: 'Ultra-premium response' });
+  }
+);
 ```
 
 ---
 
-## 🧪 Test Agents
+## 📊 Dynamic Pricing
 
-We have 4 agents registered with different reputation tiers:
+Agents receive personalized pricing based on their on-chain profile:
 
-| Agent | Address | Reputation | Tier | Fee |
-|-------|---------|------------|------|-----|
-| #1 | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` | 100 | Premium | 0.5x |
-| #2 | `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` | 75 | Standard | 1.0x |
-| #3 | `0x90F79bf6EB2c4f870365E785982E1f101E93b906` | 60 | Basic | 1.5x |
-| #4 | `0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65` | 30 | Restricted | 2.0x |
+| Factor | Good Agent | Risky Agent |
+|--------|------------|-------------|
+| Reputation 90+ | **-50%** | — |
+| Reputation 70-89 | **-25%** | — |
+| Reputation < 50 | — | **+50%** |
+| Staked (0.1+ AVAX) | **-20%** | — |
+| High risk score | — | **+25-50%** |
+| New/unknown agent | — | **+25%** |
+
+**Example:**
+- Base price: $0.05
+- Agent with 95 reputation + 1 AVAX staked → **$0.024** (52% discount)
+- Agent with 30 reputation + no stake → **$0.094** (88% surcharge)
+
+---
+
+## 🔐 Security Features
+
+### 1. Proof of Work (Anti-DDoS)
+
+```javascript
+AgentTrust.protect({
+  powDifficulty: 4  // Require 4 leading zeros in hash
+});
+```
+
+Agents must solve a PoW challenge before heavy verification begins.
+
+### 2. Unbonding Delay (Flash Loan Defense)
+
+```solidity
+// StakingModule.sol
+uint256 public unbondingPeriod = 1 hours; // Minimum 1 hour
+
+function requestUnstake(uint256 amount) external {
+    // Stake locked for unbondingPeriod
+    unlockTime = block.timestamp + unbondingPeriod;
+}
+```
+
+No instant unstaking = no flash loan attacks.
+
+### 3. Tiered Staking (Per-Endpoint Risk)
+
+```javascript
+// High-value endpoint = higher stake requirement
+app.use('/api/gpt4', AgentTrust.protect({ minStake: '1' }));    // 1 AVAX
+app.use('/api/basic', AgentTrust.protect({ minStake: '0.1' })); // 0.1 AVAX
+```
+
+### 4. Diversity-Weighted Reputation
+
+```solidity
+// ReputationEngine.sol
+score = (totalWeightedRating / totalWeight) + diversityBonus;
+
+// Agents with more unique counterparties get bonus
+diversityBonus = min(uniqueRaters / 10, 10); // Up to +10 points
+```
+
+### 5. Macaroon Sessions (Fast Re-auth)
+
+```javascript
+// First request: full verification + payment
+// Response includes: X-Session: <macaroon>
+
+// Subsequent requests: just send the macaroon
+headers: { 'X-Session': macaroon }
+// Skips on-chain lookups, validates locally
+```
+
+---
+
+## 📜 Smart Contracts (Fuji Testnet)
+
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| **AgentRegistry** | [`0xea5D764e8967b761A2Ad0817eDad81381cc6cF12`](https://testnet.snowscan.xyz/address/0xea5d764e8967b761a2ad0817edad81381cc6cf12) | ERC-721 agent identity |
+| **StakingModule** | [`0x1873A4ba044e8a2c99031A851b043aC13476F0ED`](https://testnet.snowscan.xyz/address/0x1873a4ba044e8a2c99031a851b043ac13476f0ed) | Stake, unbond, slash |
+| **ReputationEngine** | [`0xbcFC99A4391544Baa65Df5874D7b001FFA3BA9A1`](https://testnet.snowscan.xyz/address/0xbcfc99a4391544baa65df5874d7b001ffa3ba9a1) | Payment-weighted scoring |
+| **JobLogger** | [`0x05C419d5E7070dD57613dF5dBCE1b7d3F5B3dCd2`](https://testnet.snowscan.xyz/address/0x05c419d5e7070dd57613df5dbce1b7d3f5b3dcd2) | Event-based job tracking |
+
+All contracts verified on Snowscan.
+
+---
+
+## 🔌 Sponsor Integrations
+
+### Thirdweb (Payment Settlement)
+
+```javascript
+const { verifyPayment } = require('@agent-trust/gateway/integrations');
+
+// Settles via Thirdweb + independent on-chain verification
+app.use('/api', verifyPayment({ network: 'fuji' }));
+```
+
+### Turf Network (Behavioral Data)
+
+```javascript
+const { enrichWithTurf } = require('@agent-trust/gateway/integrations');
+
+// Enriches trust decisions with behavioral scoring
+app.use('/api', enrichWithTurf());
+// req.agentTrust.turf.behaviorScore, .riskMultiplier
+```
+
+### Youmio (Agent Provenance)
+
+```javascript
+const { enrichWithYoumio } = require('@agent-trust/gateway/integrations');
+
+// Verifies DIDs and applies trust boost
+app.use('/api', enrichWithYoumio());
+// req.agentTrust.youmio.verified, .trustBoost
+```
+
+---
+
+## 🎬 Demo
+
+### Live Gateway
+
+```bash
+# Start the gateway server
+cd facilitator && node src/gateway-server.js
+
+# Test with different agents
+curl "http://localhost:4022/api/pricing?agent=0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+```
+
+### What You'll See
+
+| Agent | Reputation | Stake | Price | Access |
+|-------|------------|-------|-------|--------|
+| Premium Agent | 100 | 0.1 AVAX | $0.024 | ✅ Allowed |
+| Standard Agent | 80 | 0 | $0.038 | ✅ Allowed |
+| Basic Agent | 60 | 0 | $0.050 | ✅ Allowed |
+| Restricted Agent | 40 | 0 | $0.075 | ⚠️ Higher price |
+| Blocked Agent | 20 | 0 | — | ❌ Blocked |
 
 ---
 
@@ -253,127 +285,98 @@ We have 4 agents registered with different reputation tiers:
 
 ```
 agent-trust-protocol/
-├── contracts/
-│   ├── src/
-│   │   ├── AgentIdentity.sol           # ERC-721 agent passports
-│   │   ├── ReputationRegistry.sol      # Payment-weighted scoring
-│   │   ├── CrossChainReputation.sol    # Teleporter sender (Fuji)
-│   │   └── CrossChainReputationReceiver.sol  # Teleporter receiver (Dispatch)
-│   ├── test/                           # Foundry tests (18 passing)
-│   └── script/
-│       ├── Deploy.s.sol                # Fuji deployment
-│       └── DeployDispatch.s.sol        # Dispatch deployment
-├── facilitator/
+├── contracts/              # Solidity smart contracts
 │   └── src/
-│       ├── index.js                    # Main API server
-│       ├── x402-server.js              # x402 payment server (REAL payments!)
-│       └── test-x402-real.js           # Payment test script
-├── frontend/
-│   └── app/
-│       └── page.tsx                    # Dashboard UI (demo)
-├── PRECOMPILE_ARCHITECTURE.md          # Future: Native VM integration
-└── README.md
+│       ├── AgentRegistry.sol
+│       ├── StakingModule.sol
+│       ├── ReputationEngine.sol
+│       └── JobLogger.sol
+├── sdk/                    # npm package (@agent-trust/gateway)
+│   ├── index.js
+│   ├── index.d.ts
+│   └── README.md
+├── integrations/           # Sponsor integrations
+│   ├── thirdweb.js
+│   ├── turf.js
+│   └── youmio.js
+├── facilitator/            # Gateway server
+│   └── src/
+│       ├── gateway.js
+│       └── gateway-server.js
+└── frontend/               # Dashboard UI
 ```
 
 ---
 
-## 🔧 API Endpoints
+## 🏆 Why AgentTrust Gateway Wins
 
-### Main API (Port 3000)
+| vs. Raw x402 | vs. Amiko (Solana winner) |
+|--------------|---------------------------|
+| ✅ Pre-payment trust checks | ✅ Different layer (infra, not marketplace) |
+| ✅ Dynamic pricing | ✅ Works with ANY x402 API |
+| ✅ DDoS protection | ✅ SDK-first approach |
+| ✅ Flash loan defense | ✅ On Avalanche (not duplicate) |
+| ✅ Session resumption | ✅ Sponsor integrations |
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/agents/register` | Register new agent |
-| GET | `/agents/by-address/:addr` | Get agent details |
-| GET | `/agents/discover` | Find agents with filters |
-| GET | `/agents/leaderboard` | Top agents by reputation |
-| POST | `/agents/:id/feedback` | Submit feedback |
-| POST | `/x402/verify` | Verify agent for payment |
-| GET | `/agents/:id/crosschain` | Cross-chain reputation |
-| GET | `/stats` | Protocol statistics |
-
-### x402 Server (Port 4021)
-
-| Method | Endpoint | Base Price | Description |
-|--------|----------|------------|-------------|
-| POST | `/api/ai-service` | $0.01 USDC | AI-powered analysis |
-| GET | `/api/premium-data` | $0.001 USDC | Real-time market data |
-| GET | `/api/discover-agents` | $0.005 USDC | Find high-rep agents |
-| GET | `/api/payment-info` | Free | Get pricing for agent |
-| GET | `/api/balance` | Free | Check server USDC balance |
+**We're not building another marketplace. We're building the backbone every marketplace will need.**
 
 ---
 
-## 🧪 Test Results
+## 🛠️ Development
+
+### Prerequisites
+
+- Node.js 18+
+- Foundry (for contracts)
+- Avalanche Fuji testnet AVAX
+
+### Setup
 
 ```bash
-$ forge test
+# Clone
+git clone https://github.com/agent-trust/gateway
+cd gateway
 
-[PASS] testRegisterAgent() 
-[PASS] testGetAgent()
-[PASS] testIsRegisteredAgent()
-[PASS] testSubmitFeedback()
-[PASS] testReputationScore()
-[PASS] testMeetsThreshold()
-[PASS] testCrossChainSync()
-...
+# Install SDK
+cd sdk && npm install
 
-Test result: ok. 18 passed; 0 failed
+# Install contracts
+cd ../contracts && forge install
+
+# Deploy (optional - already deployed)
+forge script script/DeployGateway.s.sol --rpc-url fuji --broadcast
 ```
 
----
+### Testing
 
-## 🔮 Future: Precompile Architecture
+```bash
+# Contract tests
+cd contracts && forge test
 
-See [PRECOMPILE_ARCHITECTURE.md](./PRECOMPILE_ARCHITECTURE.md) for our vision of native VM-level reputation:
+# SDK tests
+cd sdk && npm test
 
-- **100x cheaper** gas costs for reputation lookups
-- **Protocol-level** fee discounts for trusted agents
-- **Block-level** enforcement — bad actors rejected at mempool
-
----
-
-## 🛠️ Tech Stack
-
-- **Smart Contracts:** Solidity 0.8.20, Foundry
-- **Backend:** Node.js, Express, ethers.js
-- **Frontend:** Next.js, React, TailwindCSS
-- **Blockchain:** Avalanche Fuji C-Chain, Dispatch L1
-- **Cross-Chain:** Teleporter / ICM
-- **Payments:** x402 Protocol, EIP-3009 `transferWithAuthorization`
-
----
-
-## 📊 On-Chain Proof Summary
-
-| What | Proof |
-|------|-------|
-| Real USDC Payment | [TX: 0x858c7610...](https://testnet.snowscan.xyz/tx/0x858c761094390b6f0c8fd5147d4a7f3e8869c8eddc4bfab725782b19fb640c71) |
-| Teleporter Message | [TX: 0xd3e9c290...](https://testnet.snowscan.xyz/tx/0xd3e9c290290c489383a9cefe4ff8dc32d2d792f383f99418e43691b516ef83ff) |
-| AgentIdentity Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0xeCB96A74eEa4A6a7ac09658AB87650738D1d2412#code) |
-| ReputationRegistry Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0x3A21fE046C7E8CD9e350a8DA3b133BFa0dA27dc4#code) |
-| CrossChainReputation Contract | [Verified on Snowscan](https://testnet.snowscan.xyz/address/0x5c8dfe8484423a9370AcC451Af0083F103eA48d4#code) |
-| Dispatch Receiver Contract | [Deployed](https://subnets.avax.network/dispatch/testnet/address/0xBcf07EeDDb1C306660BEb4Ef5F47fDbb999D80a8) |
+# Integration tests
+cd integrations && npm test
+```
 
 ---
 
 ## 📄 License
 
-MIT
+MIT © AgentTrust Protocol
 
 ---
 
-## 🏆 Hackathon
+## 🔗 Links
 
-**Avalanche x402 Hack2Build 2025**
-
-Built by [Naga](https://github.com/nagavaishak)
+- **Contracts**: [Snowscan (Fuji)](https://testnet.snowscan.xyz/address/0xea5d764e8967b761a2ad0817edad81381cc6cf12)
+- **Demo Video**: [Coming Soon]
+- **Hackathon**: [Avalanche x402 Hack2Build 2025](https://x402.org)
 
 ---
 
-### Key Differentiators
-
-1. **Real Payments** — Not simulated. USDC actually moves on-chain.
-2. **Real Cross-Chain** — Teleporter message sent with on-chain proof.
-3. **Real Reputation** — Payment-weighted scoring stored on-chain.
-4. **Production Architecture** — Precompile design doc for mainnet scaling.
+<p align="center">
+  <b>x402 gave us machine-native payments.<br>
+  AgentTrust Gateway gives us machine-native trust.</b>
+</p>
