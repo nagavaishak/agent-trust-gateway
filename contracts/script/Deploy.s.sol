@@ -1,38 +1,34 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/AgentIdentity.sol";
-import "../src/ReputationRegistry.sol";
-import "../src/CrossChainReputation.sol";
+import "../src/AgentRegistry.sol";
+import "../src/ReputationEngine.sol";
+import "../src/StakingModule.sol";
+import "../src/JobLogger.sol";
 
 contract DeployScript is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         
-        // Mock Teleporter address for local testing
-        // On Fuji, use: 0x253b2784c75e510dD0fF1da844684a1aC0aa5fcf
-        address teleporterAddress = vm.envOr("TELEPORTER_ADDRESS", address(0x253b2784c75e510dD0fF1da844684a1aC0aa5fcf));
-        
         vm.startBroadcast(deployerPrivateKey);
         
-        // Deploy AgentIdentity
-        AgentIdentity identity = new AgentIdentity();
-        console.log("AgentIdentity deployed at:", address(identity));
+        // Deploy AgentRegistry
+        AgentRegistry registry = new AgentRegistry();
+        console.log("AgentRegistry:", address(registry));
         
-        // Deploy ReputationRegistry
-        ReputationRegistry reputation = new ReputationRegistry(address(identity));
-        console.log("ReputationRegistry deployed at:", address(reputation));
+        // Deploy ReputationEngine (no constructor args)
+        ReputationEngine reputation = new ReputationEngine();
+        console.log("ReputationEngine:", address(reputation));
         
-        // Deploy CrossChainReputation
-        CrossChainReputation crossChain = new CrossChainReputation(teleporterAddress, address(reputation));
-        console.log("CrossChainReputation deployed at:", address(crossChain));
+        // Deploy StakingModule
+        StakingModule staking = new StakingModule(address(registry));
+        console.log("StakingModule:", address(staking));
+        
+        // Deploy JobLogger (no constructor args)
+        JobLogger jobLogger = new JobLogger();
+        console.log("JobLogger:", address(jobLogger));
         
         vm.stopBroadcast();
-        
-        console.log("\n--- Deployment Complete ---");
-        console.log("IDENTITY_CONTRACT=", address(identity));
-        console.log("REPUTATION_CONTRACT=", address(reputation));
-        console.log("CROSSCHAIN_CONTRACT=", address(crossChain));
     }
 }
